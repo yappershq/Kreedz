@@ -75,7 +75,10 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
     // ConVars
     // ReSharper disable InconsistentNaming
+
     private readonly IConVar timer_replay_delay;
+    private readonly IConVar mp_randomspawn;
+
     // ReSharper restore InconsistentNaming
 
     private CancellationTokenSource _mapRecordLoadToken = new();
@@ -85,8 +88,10 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
     // Native hook delegate
     // ReSharper disable InconsistentNaming
+
     private static unsafe delegate* unmanaged<nint, int, int, nint, CStrikeWeaponType, int, bool>
         CCSBotManager_BotAddCommand;
+
     // ReSharper restore InconsistentNaming
 
     public ReplayPlaybackModule(InterfaceBridge                bridge,
@@ -111,12 +116,14 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
         _replayBotBySlot = new ReplayBotData?[PlayerSlot.MaxPlayerCount];
 
+        mp_randomspawn = bridge.ConVarManager.FindConVar("mp_randomspawn");
+
         timer_replay_delay = bridge.ConVarManager.CreateConVar("timer_replay_delay",
                                                                2.0f,
                                                                0.1f,
                                                                5.0f,
                                                                "Delay in seconds before starting the next replay after one finishes")
-            !;
+                             ?? throw new Exception("Failed to create convar");
 
         unsafe
         {
@@ -463,6 +470,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
     private unsafe void AddReplayBot()
     {
+        mp_randomspawn.Set(2);
+
         for (var i = 0; i < _replayBotConfigs.Length; i++)
         {
             _expectingBot = true;
@@ -474,6 +483,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
             _expectingBot = false;
         }
+
+        mp_randomspawn.Set(0);
     }
 
     private void StartReplay(ReplayBotData bot)
