@@ -470,7 +470,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
     private unsafe void AddReplayBot()
     {
-        mp_randomspawn.Set(2);
+        mp_randomspawn.Set(1);
 
         for (var i = 0; i < _replayBotConfigs.Length; i++)
         {
