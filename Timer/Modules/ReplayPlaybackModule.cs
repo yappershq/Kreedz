@@ -116,7 +116,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
         _replayBotBySlot = new ReplayBotData?[PlayerSlot.MaxPlayerCount];
 
-        mp_randomspawn = bridge.ConVarManager.FindConVar("mp_randomspawn");
+        mp_randomspawn = bridge.ConVarManager.FindConVar("mp_randomspawn") ?? throw new Exception("Failed to find convar mp_randomspawn");
 
         timer_replay_delay = bridge.ConVarManager.CreateConVar("timer_replay_delay",
                                                                2.0f,
