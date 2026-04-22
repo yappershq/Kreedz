@@ -1,0 +1,71 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  CONFIGURATION: Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore SurfTimer.slnx
+
+      - name: Publish Timer
+        run: >
+          dotnet publish Timer/Timer.csproj
+          -c ${{ env.CONFIGURATION }}
+          -p:Platform=x64
+          -o sharp/modules/Timer
+          --no-restore
+
+      - name: Publish Timer.RequestManager
+        run: >
+          dotnet publish Timer.RequestManager/Timer.RequestManager.csproj
+          -c ${{ env.CONFIGURATION }}
+          -p:Platform=x64
+          -o sharp/modules/Timer.RequestManager
+          --no-restore
+
+      - name: Publish Timer.Shared
+        run: >
+          dotnet publish Timer.Shared/Timer.Shared.csproj
+          -c ${{ env.CONFIGURATION }}
+          -p:Platform=x64
+          -o sharp/shared/Timer.Shared
+          --no-restore
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurfTimer
+          path: sharp/
+
+      - name: Package release archive
+        if: github.event_name == 'release'
+        run: |
+          cd sharp
+          zip -r ../SurfTimer-${{ github.event.release.tag_name }}.zip .
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SurfTimer-${{ github.event.release.tag_name }}.zip
