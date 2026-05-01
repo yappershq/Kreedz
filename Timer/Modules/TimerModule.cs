@@ -427,17 +427,21 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
                     }
                 }
 
+                timerInfo.StartTimer(info.Track, velocity);
+                NotifyPlayerTimerStart(controller, pawn, timerInfo);
+
                 if (_zoneModule.CurrentTrackHasCheckpoints(timerInfo.Track))
                 {
-                    timerInfo.CurrentCheckpointInfo = new () { StartVelocity = velocity, MaxVelocity = velocity };
+                    timerInfo.CurrentCheckpointInfo = new ()
+                    {
+                        StartVelocity = velocity,
+                        MaxVelocity   = velocity,
+                    };
                 }
                 else
                 {
                     timerInfo.CurrentCheckpointInfo = null;
                 }
-
-                timerInfo.StartTimer(info.Track, velocity);
-                NotifyPlayerTimerStart(controller, pawn, timerInfo);
 
                 if (_zoneModule.IsCurrentTrackLinear(timerInfo.Track))
                 {
