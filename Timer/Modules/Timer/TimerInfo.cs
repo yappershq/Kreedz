@@ -70,6 +70,16 @@ internal class TimerInfo : ITimerInfo
         MaxVelocity   = new ();
         AvgVelocity   = new ();
         StartVelocity = new ();
+        EndVelocity   = new ();
+        Checkpoint    = 0;
+        CheckpointInfoInternal.Clear();
+        CurrentCheckpointInfo = null;
+
+        LastForwardMove = 0;
+        LastLeftMove    = 0;
+        LastYaw         = 0;
+        WasOnGround     = false;
+        OnGroundTick    = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -153,7 +163,6 @@ internal class TimerInfo : ITimerInfo
     public void StopTimer()
     {
         Stop();
-        CheckpointInfoInternal.Clear();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

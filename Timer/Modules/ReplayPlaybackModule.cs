@@ -739,7 +739,6 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         var flags = pawn.Flags;
 
         flags |= EntityFlags.AtControls;
-        flags &= ~(EntityFlags.OnGround | EntityFlags.Fly | EntityFlags.WaterJump);
 
         pawn.Flags = flags;
 
