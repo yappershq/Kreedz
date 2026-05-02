@@ -103,8 +103,18 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         }
 
         var targetName = entity.Name;
+        var handle     = entity.Handle.GetValue();
+
+        if (_zones.ContainsKey(handle))
+        {
+            return;
+        }
+
 #if DEBUG
-        _logger.LogInformation("Entity {classname} spawned with name {targetname}", entity.Classname, targetName);
+        _logger.LogInformation("Entity {classname} spawned with name {targetname}, handle: 0x{h:X}",
+                               entity.Classname,
+                               targetName,
+                               entity.Handle.GetValue());
 #endif
 
         if (string.IsNullOrEmpty(targetName) || string.IsNullOrWhiteSpace(targetName))
@@ -139,13 +149,21 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
             return;
         }
-
+#if DEBUG
         _logger.LogWarning("{t} is not the zone we want", targetName);
+#endif
     }
 
     public void OnEntityDeleted(IBaseEntity entity)
     {
-        if (!_zones.Remove(entity.Handle.GetValue(), out var info) || info.Beams is not { } beams)
+        if (!_zones.Remove(entity.Handle.GetValue(), out var info))
+            return;
+
+#if DEBUG
+        _logger.LogWarning("Removed zone {t}", info.TargetName);
+#endif
+
+        if (info.Beams is not { } beams)
         {
             return;
         }
@@ -200,6 +218,11 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         return EHookAction.Ignored;
     }
 
+    public void OnRoundRestarted()
+    {
+        FindZoneStartPosition();
+    }
+
     public void OnGamePostInit()
     {
         if (!FindTrigger())
@@ -230,10 +253,11 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                      try
                      {
                          var mapName = _bridge.GlobalVars.MapName;
-                         var zones   = await RetryHelper.RetryAsync(
-                             () => _requestManager.GetZonesAsync(mapName),
-                             RetryHelper.IsTransient, _logger, "GetZonesAsync"
-                         ).ConfigureAwait(false);
+
+                         var zones = await RetryHelper.RetryAsync(() => _requestManager.GetZonesAsync(mapName),
+                                                                  RetryHelper.IsTransient,
+                                                                  _logger,
+                                                                  "GetZonesAsync").ConfigureAwait(false);
 
                          await _bridge.ModSharp.InvokeFrameActionAsync(() =>
                          {
@@ -242,8 +266,6 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                                  var zoneInfo = ZoneMapper.ToZoneInfo(zoneData);
                                  AddZone(zoneInfo);
                              }
-
-                             FindZoneStartPosition();
                          }).ConfigureAwait(false);
                      }
                      catch (Exception e)
