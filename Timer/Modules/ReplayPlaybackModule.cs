@@ -438,6 +438,10 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
     private void Timer_CheckReplayBot()
     {
+        // don't add bots if there are no clients in the server to prevent bots from disappearing in scoreboard/hud
+        if (_bridge.ClientManager.GetClientCount(true) == 0)
+            return;
+
         if (_replayBots.Count == 0)
         {
             AddReplayBot();

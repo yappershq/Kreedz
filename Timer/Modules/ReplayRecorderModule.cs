@@ -723,7 +723,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                      if (timedOut is not null)
                                                      {
                                                          timedOut.TimeoutTimerId = null;
-
+#if DEBUG
                                                          _logger
                                                              .LogWarning("Pending stage replay timed out for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId}",
                                                                          capturedKey.SteamId,
@@ -731,7 +731,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                                          capturedKey.Track,
                                                                          capturedKey.Stage,
                                                                          capturedKey.AttemptId);
-
+#endif
                                                          SavePendingReplayAsFallback(capturedKey, timedOut);
                                                      }
 
@@ -903,14 +903,14 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         pending.TimeoutTimerId = null;
 
-        var snapshot = pending.Snapshot;
-        var header   = snapshot.Header;
-        var frames   = snapshot.Frames;
-        var tempPath = pending.TempFilePath;
-        var style    = key.Style;
-        var track    = key.Track;
-        var stage    = key.Stage;
-        var steamId  = key.SteamId;
+        var snapshot           = pending.Snapshot;
+        var header             = snapshot.Header;
+        var frames             = snapshot.Frames;
+        var tempPath           = pending.TempFilePath;
+        var style              = key.Style;
+        var track              = key.Track;
+        var stage              = key.Stage;
+        var steamId            = key.SteamId;
         var compressionLevel   = timer_replay_file_compression_level.GetInt32();
         var compressionWorkers = timer_replay_file_compression_workers.GetInt32();
 
@@ -943,10 +943,16 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         var fallbackContext = new ReplaySaveContext
         {
-            SteamId = steamId, FinishTime = header.Time, AttemptResult = EAttemptResult.NoNewRecord,
+            SteamId       = steamId,
+            FinishTime    = header.Time,
+            AttemptResult = EAttemptResult.NoNewRecord,
         };
 
-        var fallbackContent = new ReplayContent { Header = header, Frames = frames };
+        var fallbackContent = new ReplayContent
+        {
+            Header = header,
+            Frames = frames,
+        };
 
         _ = _bridge.ModSharp.InvokeFrameActionAsync(() =>
         {
@@ -962,9 +968,12 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         _fallbackRecords[key] = new FallbackReplayRecord
         {
-            TempFilePath = tempPath, WriteTask = writeTask, CreatedAt = DateTime.UtcNow,
+            TempFilePath = tempPath,
+            WriteTask    = writeTask,
+            CreatedAt    = DateTime.UtcNow,
         };
 
+#if DEBUG
         _logger.LogWarning("Fallback-saved pending replay for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId} to {Path}",
                            steamId,
                            style,
@@ -972,6 +981,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                            stage,
                            key.AttemptId,
                            tempPath);
+#endif
 
         // Expire old entries (> 10 min)
         var                   expiryCutoff = DateTime.UtcNow.AddMinutes(-10);
@@ -1053,7 +1063,9 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
                 var reinsertRecord = new FallbackReplayRecord
                 {
-                    TempFilePath = tempPath, WriteTask = writeTask, CreatedAt = createdAt,
+                    TempFilePath = tempPath,
+                    WriteTask    = writeTask,
+                    CreatedAt    = createdAt,
                 };
 
                 _ = bridge.ModSharp.InvokeFrameActionAsync(() => { _fallbackRecords[reinsertKey] = reinsertRecord; });
@@ -1121,7 +1133,9 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
             var context = new ReplaySaveContext
             {
-                SteamId = recordSteamId, FinishTime = recordEvent.Time, AttemptResult = attemptResult,
+                SteamId       = recordSteamId,
+                FinishTime    = recordEvent.Time,
+                AttemptResult = attemptResult,
             };
 
             var isNewBest = false;
@@ -1191,7 +1205,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                     }
                 }
             }
-
+#if DEBUG
             logger.LogInformation("Successfully processed fallback record for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId}: renamed {TempPath} → {FinalPath}",
                                   steamId,
                                   style,
@@ -1200,6 +1214,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                   attemptId,
                                   tempPath,
                                   finalPath);
+#endif
         });
     }
 
