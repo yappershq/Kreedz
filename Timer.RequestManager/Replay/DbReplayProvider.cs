@@ -13,15 +13,21 @@ namespace Timer.RequestManager.Replay;
 
 internal sealed class DbReplayProvider : IReplayProvider
 {
-    private readonly StorageServiceImpl       _storage;
-    private readonly IReplayStorage           _replayStorage;
+    private readonly StorageServiceImpl        _storage;
+    private readonly IReplayStorage            _replayStorage;
     private readonly ILogger<DbReplayProvider> _logger;
 
-    public DbReplayProvider(StorageServiceImpl storage, IReplayStorage replayStorage, ILogger<DbReplayProvider> logger)
+    public bool UploadNonPersonalBest { get; }
+
+    public DbReplayProvider(StorageServiceImpl        storage,
+                            IReplayStorage            replayStorage,
+                            bool                      uploadNonPersonalBest,
+                            ILogger<DbReplayProvider> logger)
     {
-        _storage       = storage;
-        _replayStorage = replayStorage;
-        _logger        = logger;
+        _storage              = storage;
+        _replayStorage        = replayStorage;
+        UploadNonPersonalBest = uploadNonPersonalBest;
+        _logger               = logger;
     }
 
     public Task<byte[]?> GetReplayAsync(string mapName, int style, int track, ulong? steamId = null)
@@ -82,7 +88,24 @@ internal sealed class DbReplayProvider : IReplayProvider
 
     private async Task UploadReplayCoreAsync(string key, string mapName, ulong steamId, ulong runId, byte[] replayData)
     {
-        var url = await _replayStorage.UploadAsync(key, replayData);
+#if DEBUG
+        _logger.LogInformation("DbReplayProvider.Upload start key={Key} bytes={Bytes} steamId={SteamId} runId={RunId}",
+                               key, replayData.Length, steamId, runId);
+#endif
+
+        string url;
+        try
+        {
+            url = await _replayStorage.UploadAsync(key, replayData);
+#if DEBUG
+            _logger.LogInformation("DbReplayProvider.Upload storage OK key={Key} url={Url}", key, url);
+#endif
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "DbReplayProvider.Upload storage FAILED key={Key}", key);
+            throw;
+        }
 
         try
         {
@@ -99,6 +122,10 @@ internal sealed class DbReplayProvider : IReplayProvider
             };
 
             await _storage.Db.Storageable(entity).ExecuteCommandAsync();
+
+#if DEBUG
+            _logger.LogInformation("DbReplayProvider.Upload DB OK key={Key} mapId={MapId} runId={RunId}", key, mapId, runId);
+#endif
         }
         catch (Exception ex)
         {

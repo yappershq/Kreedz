@@ -7,5 +7,12 @@
     "username": "root",
     "password": "change_me"
   },
-  "replay_storage_base_url": "https://your-replay-storage.example.com/replays"
+  // Leave empty / omit the whole "replay" section to disable remote replay upload.
+  // See README.md → "Replay Storage" for the HTTP contract your endpoint must implement.
+  "replay": {
+    // replace storage_base_url to your storage endpoint
+    "storage_base_url": "",
+    // If true, every finished run is uploaded; if false, only new PB/WR replays.
+    "upload_non_personal_best": false
+  }
 }

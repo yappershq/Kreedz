@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Source2Surf/Timer
  * Copyright (C) 2025 Nukoooo and Kxnrl
  *
@@ -61,6 +61,43 @@ internal class InlineHookWrapper
     public nint Trampoline => _hook.Trampoline;
 }
 
+internal class MidFuncHookWrapper
+{
+    private readonly IMidFuncHook _hook;
+
+    public MidFuncHookWrapper(IMidFuncHook hook, nint address, nint funcPtr)
+    {
+        _hook = hook;
+
+        _hook.Prepare(address, funcPtr);
+    }
+
+    public MidFuncHookWrapper(IMidFuncHook hook, string gamedata, nint funcPtr)
+    {
+        _hook = hook;
+
+        _hook.Prepare(gamedata, funcPtr);
+    }
+
+    public bool Install()
+    {
+        var result = _hook.Install();
+
+        if (!result)
+        {
+            _hook.Dispose();
+        }
+
+        return result;
+    }
+
+    public void Uninstall()
+    {
+        _hook.Uninstall();
+        _hook.Dispose();
+    }
+}
+
 internal interface IInlineHookManager
 {
     bool AddHook(ILibraryModule module, string pattern, nint funcPtr, out nint trampoline);
@@ -68,12 +105,19 @@ internal interface IInlineHookManager
     bool AddHook(string gamedata, nint funcPtr, out nint trampoline);
 
     bool AddHook(nint address, nint funcPtr, out nint trampoline);
+
+    bool AddMidFuncHook(ILibraryModule module, string pattern, nint funcPtr);
+
+    bool AddMidFuncHook(string gamedata, nint funcPtr);
+
+    bool AddMidFuncHook(nint address, nint funcPtr);
 }
 
 internal class InlineHookManager : IManager, IInlineHookManager
 {
-    private readonly InterfaceBridge         _bridge;
-    private readonly List<InlineHookWrapper> _hooks = [];
+    private readonly InterfaceBridge          _bridge;
+    private readonly List<InlineHookWrapper>  _hooks    = [];
+    private readonly List<MidFuncHookWrapper> _midHooks = [];
 
     public InlineHookManager(InterfaceBridge bridge)
         => _bridge = bridge;
@@ -84,6 +128,11 @@ internal class InlineHookManager : IManager, IInlineHookManager
     public void Shutdown()
     {
         foreach (var hook in _hooks)
+        {
+            hook.Uninstall();
+        }
+
+        foreach (var hook in _midHooks)
         {
             hook.Uninstall();
         }
@@ -114,8 +163,6 @@ internal class InlineHookManager : IManager, IInlineHookManager
 
         if (!result)
         {
-            detour.Dispose();
-
             return false;
         }
 
@@ -136,13 +183,60 @@ internal class InlineHookManager : IManager, IInlineHookManager
 
         if (!result)
         {
-            detour.Dispose();
-
             return false;
         }
 
         trampoline = hk.Trampoline;
         _hooks.Add(hk);
+
+        return true;
+    }
+
+    public bool AddMidFuncHook(ILibraryModule module, string pattern, nint funcPtr)
+    {
+        var address = module.FindPattern(pattern);
+
+        return AddMidFuncHook(address, funcPtr);
+    }
+
+    public bool AddMidFuncHook(string gamedata, IntPtr funcPtr)
+    {
+        if (funcPtr == 0)
+        {
+            return true;
+        }
+
+        var hk = new MidFuncHookWrapper(_bridge.HookManager.CreateMidFuncHook(), gamedata, funcPtr);
+
+        var result = hk.Install();
+
+        if (!result)
+        {
+            return false;
+        }
+
+        _midHooks.Add(hk);
+
+        return true;
+    }
+
+    public bool AddMidFuncHook(nint address, nint funcPtr)
+    {
+        if (address == 0)
+        {
+            return true;
+        }
+
+        var hk = new MidFuncHookWrapper(_bridge.HookManager.CreateMidFuncHook(), address, funcPtr);
+
+        var result = hk.Install();
+
+        if (!result)
+        {
+            return false;
+        }
+
+        _midHooks.Add(hk);
 
         return true;
     }

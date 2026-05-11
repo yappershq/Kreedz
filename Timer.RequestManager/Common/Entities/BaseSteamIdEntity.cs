@@ -7,7 +7,7 @@ namespace Source2Surf.Timer.Common.Entities;
 
 internal abstract class BaseSteamIdEntity
 {
-    [SugarColumn(IsPrimaryKey = true, SqlParameterDbType = typeof(SteamIdDataConvert))]
+    [SugarColumn(IsPrimaryKey = true, ColumnDataType = "bigint", SqlParameterDbType = typeof(SteamIdDataConvert))]
     public SteamID SteamId { get; set; }
 }
 

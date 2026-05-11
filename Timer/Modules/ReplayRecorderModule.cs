@@ -82,7 +82,6 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
     private readonly IConVar timer_replay_stage_postrun_time;
     private readonly IConVar timer_replay_file_compression_level;
     private readonly IConVar timer_replay_file_compression_workers;
-    private readonly IConVar timer_replay_remote_upload;
     private readonly IConVar timer_replay_pending_timeout;
 
     // ReSharper restore InconsistentNaming
@@ -124,9 +123,6 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         timer_replay_file_compression_workers
             = bridge.ConVarManager.CreateConVar("timer_replay_file_compression_workers", 4, 0, 256, "Number of threads for replay file compression, 0 to disable")!;
-
-        timer_replay_remote_upload
-            = bridge.ConVarManager.CreateConVar("timer_replay_remote_upload", false, "Enable remote replay uploading")!;
 
         timer_replay_pending_timeout
             = bridge.ConVarManager.CreateConVar("timer_replay_pending_timeout",
@@ -789,7 +785,6 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         var header = snapshot.Header;
         var frames = snapshot.Frames;
 
-        var uploadEnabled      = timer_replay_remote_upload.GetBool();
         var mapName            = _bridge.GlobalVars.MapName;
         var compressionLevel   = timer_replay_file_compression_level.GetInt32();
         var compressionWorkers = timer_replay_file_compression_workers.GetInt32();
@@ -820,14 +815,33 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                         : _playbackModule.OnNewStageReplaySaved(style, track, stage, replayContent, context);
                 }).ConfigureAwait(false);
 
+                var providerReady = _replayProviderProxy.IsAvailable;
+                var shouldUpload  = providerReady
+                                 && (_replayProviderProxy.UploadNonPersonalBest
+                                  || _playbackModule.ShouldUploadReplay(header.SteamId, style, track, stage, header.Time, isNewBest));
+
+#if DEBUG
+                _logger.LogInformation(
+                    "Replay upload gate: steamId={SteamId} style={Style} track={Track} stage={Stage} time={Time:F3} "
+                  + "hasRunId={HasRunId} providerAvailable={ProviderReady} uploadNonPB={UploadNonPB} "
+                  + "isNewBest={IsNewBest} shouldUpload={ShouldUpload}",
+                    header.SteamId, style, track, stage, header.Time,
+                    runId.HasValue, providerReady, _replayProviderProxy.UploadNonPersonalBest, isNewBest, shouldUpload);
+#endif
+
                 if (runId is { } savedRunId
-                    && uploadEnabled
-                    && _replayProviderProxy.IsAvailable
-                    && _playbackModule.ShouldUploadReplay(header.SteamId, style, track, stage, header.Time, isNewBest))
+                    && providerReady
+                    && shouldUpload)
                 {
                     try
                     {
                         var replayBytes = await File.ReadAllBytesAsync(filePath).ConfigureAwait(false);
+
+#if DEBUG
+                        _logger.LogInformation(
+                            "Uploading replay: map={Map} style={Style} track={Track} stage={Stage} steamId={SteamId} runId={RunId} bytes={Bytes}",
+                            mapName, style, track, stage, header.SteamId, savedRunId, replayBytes.Length);
+#endif
 
                         if (stage == 0)
                         {
@@ -848,6 +862,12 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                                               (ulong) savedRunId,
                                                                               replayBytes).ConfigureAwait(false);
                         }
+
+#if DEBUG
+                        _logger.LogInformation(
+                            "Uploaded replay: map={Map} style={Style} track={Track} stage={Stage} runId={RunId}",
+                            mapName, style, track, stage, savedRunId);
+#endif
                     }
                     catch (Exception uploadEx)
                     {
@@ -1035,7 +1055,6 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
             ? ReplayShared.BuildMainReplayPath(_replayDirectory, _bridge.GlobalVars.MapName, style, track, runId)
             : ReplayShared.BuildStageReplayPath(_replayDirectory, _bridge.GlobalVars.MapName, style, track, stage, runId);
 
-        var uploadEnabled       = timer_replay_remote_upload.GetBool();
         var mapName             = _bridge.GlobalVars.MapName;
         var replayProviderProxy = _replayProviderProxy;
         var playbackModule      = _playbackModule;
@@ -1155,15 +1174,26 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                 }
             }).ConfigureAwait(false);
 
+            var providerReady = replayProviderProxy.IsAvailable;
+            var uploadNonPB   = replayProviderProxy.UploadNonPersonalBest;
+
+#if DEBUG
+            logger.LogInformation(
+                "Fallback replay upload gate: steamId={SteamId} style={Style} track={Track} stage={Stage} time={Time:F3} "
+              + "hasBytes={HasBytes} providerAvailable={ProviderReady} uploadNonPB={UploadNonPB} isNewBest={IsNewBest}",
+                recordSteamId, style, track, stage, recordEvent.Time,
+                replayBytes is not null, providerReady, uploadNonPB, isNewBest);
+#endif
+
             if (replayBytes is not null
-                && uploadEnabled
-                && replayProviderProxy.IsAvailable)
+                && providerReady)
             {
                 var shouldUpload = false;
 
                 await bridge.ModSharp.InvokeFrameActionAsync(() =>
                 {
-                    shouldUpload = playbackModule.ShouldUploadReplay(recordSteamId,
+                    shouldUpload = uploadNonPB
+                                || playbackModule.ShouldUploadReplay(recordSteamId,
                                                                      style,
                                                                      track,
                                                                      stage,
@@ -1171,10 +1201,22 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                                      isNewBest);
                 }).ConfigureAwait(false);
 
+#if DEBUG
+                logger.LogInformation(
+                    "Fallback replay shouldUpload={ShouldUpload} for steamId={SteamId} style={Style} track={Track} stage={Stage}",
+                    shouldUpload, recordSteamId, style, track, stage);
+#endif
+
                 if (shouldUpload)
                 {
                     try
                     {
+#if DEBUG
+                        logger.LogInformation(
+                            "Uploading fallback replay: map={Map} style={Style} track={Track} stage={Stage} steamId={SteamId} runId={RunId} bytes={Bytes}",
+                            mapName, style, track, stage, recordSteamId, runId, replayBytes.Length);
+#endif
+
                         if (stage == 0)
                         {
                             await replayProviderProxy.UploadReplayAsync(mapName,
@@ -1194,6 +1236,12 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                                              (ulong) runId,
                                                                              replayBytes).ConfigureAwait(false);
                         }
+
+#if DEBUG
+                        logger.LogInformation(
+                            "Uploaded fallback replay: map={Map} style={Style} track={Track} stage={Stage} runId={RunId}",
+                            mapName, style, track, stage, runId);
+#endif
                     }
                     catch (Exception uploadEx)
                     {

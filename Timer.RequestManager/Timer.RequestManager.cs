@@ -17,17 +17,18 @@ namespace Timer.RequestManager;
 
 public class SqlRequestManager : IModSharpModule
 {
-    private const string TimerConfigFileName      = "timer.jsonc";
-    private const string TimerConfigDirectoryName = "configs";
-    private const string ConnectionStringKey       = "Timer";
-    private const string ModuleConnectionStringKey = "Timer.RequestManager";
-    private const string ReplayStorageBaseUrlKey    = "Timer:ReplayStorageBaseUrl";
+    private const string TimerConfigFileName            = "timer.jsonc";
+    private const string TimerConfigDirectoryName       = "configs";
+    private const string ConnectionStringKey            = "Timer";
+    private const string ModuleConnectionStringKey      = "Timer.RequestManager";
+    private const string ReplayStorageBaseUrlKey        = "Timer:ReplayStorageBaseUrl";
+    private const string ReplayUploadNonPersonalBestKey = "Timer:ReplayUploadNonPersonalBest";
 
     private readonly ISharedSystem              _shared;
     private readonly ILogger<SqlRequestManager> _logger;
 
-    private readonly IRequestManager  _impl;
-    private readonly DbReplayProvider _replayProvider;
+    private readonly IRequestManager   _impl;
+    private readonly DbReplayProvider? _replayProvider;
 
     public SqlRequestManager(
         ISharedSystem  sharedSystem,
@@ -49,14 +50,26 @@ public class SqlRequestManager : IModSharpModule
                                                  sharedSystem.GetLoggerFactory().CreateLogger<StorageServiceImpl>());
         _impl = storageImpl;
 
-        var (replayStorageBaseUrl, replayStorageSource) = ResolveReplayStorageBaseUrl(sharpPath, configuration);
+        var replayConfig = ResolveReplayConfig(sharpPath, configuration);
 
-        _logger.LogInformation("Resolved replay storage URL from {source}.", replayStorageSource);
+        if (string.IsNullOrWhiteSpace(replayConfig.BaseUrl))
+        {
+            _logger.LogInformation("Replay storage URL not configured (source={source}). Remote replay upload disabled.",
+                                   replayConfig.Source);
+            _replayProvider = null;
+        }
+        else
+        {
+            _logger.LogInformation("Resolved replay storage URL from {source} (uploadNonPersonalBest={flag}).",
+                                   replayConfig.Source,
+                                   replayConfig.UploadNonPersonalBest);
 
-        var replayStorage = new HttpReplayStorage(new HttpClient(), replayStorageBaseUrl);
-        _replayProvider = new DbReplayProvider(storageImpl,
-                                               replayStorage,
-                                               sharedSystem.GetLoggerFactory().CreateLogger<DbReplayProvider>());
+            var replayStorage = new HttpReplayStorage(new HttpClient(), replayConfig.BaseUrl);
+            _replayProvider = new DbReplayProvider(storageImpl,
+                                                   replayStorage,
+                                                   replayConfig.UploadNonPersonalBest,
+                                                   sharedSystem.GetLoggerFactory().CreateLogger<DbReplayProvider>());
+        }
     }
 
     public bool Init()
@@ -81,7 +94,11 @@ public class SqlRequestManager : IModSharpModule
     public void PostInit()
     {
         _shared.GetSharpModuleManager().RegisterSharpModuleInterface(this, IRequestManager.Identity, _impl);
-        _shared.GetSharpModuleManager().RegisterSharpModuleInterface(this, IReplayProvider.Identity, _replayProvider);
+
+        if (_replayProvider is not null)
+        {
+            _shared.GetSharpModuleManager().RegisterSharpModuleInterface<IReplayProvider>(this, IReplayProvider.Identity, _replayProvider);
+        }
     }
 
     public void Shutdown()
@@ -107,30 +124,34 @@ public class SqlRequestManager : IModSharpModule
         return (parsed.DbType, parsed.ConnectionString, "IConfiguration:ConnectionStrings");
     }
 
-    private static (string BaseUrl, string Source) ResolveReplayStorageBaseUrl(
-        string sharpPath,
-        IConfiguration configuration)
+    private readonly record struct ReplayConfig(string BaseUrl, bool UploadNonPersonalBest, string Source);
+
+    private static ReplayConfig ResolveReplayConfig(string sharpPath, IConfiguration configuration)
     {
         var configPath = Path.Combine(sharpPath, TimerConfigDirectoryName, TimerConfigFileName);
 
         if (File.Exists(configPath))
         {
-            var baseUrl = ParseReplayStorageBaseUrlFromTimerJsonc(configPath);
+            var parsed = ParseReplayConfigFromTimerJsonc(configPath);
 
-            if (!string.IsNullOrWhiteSpace(baseUrl))
+            if (!string.IsNullOrWhiteSpace(parsed.BaseUrl))
             {
-                return (baseUrl, configPath);
+                return parsed with { Source = configPath };
             }
         }
 
-        var fallback = configuration[ReplayStorageBaseUrlKey];
+        var fallbackUrl                  = configuration[ReplayStorageBaseUrlKey];
+        var fallbackUploadNonBestRaw     = configuration[ReplayUploadNonPersonalBestKey];
+        var fallbackUploadNonBest        = !string.IsNullOrWhiteSpace(fallbackUploadNonBestRaw)
+                                        && bool.TryParse(fallbackUploadNonBestRaw, out var parsedBool)
+                                        && parsedBool;
 
-        if (!string.IsNullOrWhiteSpace(fallback))
+        if (!string.IsNullOrWhiteSpace(fallbackUrl))
         {
-            return (fallback, $"IConfiguration:{ReplayStorageBaseUrlKey}");
+            return new ReplayConfig(fallbackUrl, fallbackUploadNonBest, $"IConfiguration:{ReplayStorageBaseUrlKey}");
         }
 
-        return (string.Empty, "none");
+        return new ReplayConfig(string.Empty, false, "none");
     }
 
     private static (DbType DbType, string ConnectionString) ParseTimerJsonc(string configPath)
@@ -170,7 +191,7 @@ public class SqlRequestManager : IModSharpModule
         };
     }
 
-    private static string? ParseReplayStorageBaseUrlFromTimerJsonc(string configPath)
+    private static ReplayConfig ParseReplayConfigFromTimerJsonc(string configPath)
     {
         using var stream = File.OpenRead(configPath);
 
@@ -188,28 +209,22 @@ public class SqlRequestManager : IModSharpModule
             throw new InvalidDataException($"Invalid root object in {configPath}.");
         }
 
-        var directBaseUrl = ReadOptionalString(root,
-                                               "replay_storage_base_url",
-                                               "replayStorageBaseUrl",
-                                               "ReplayStorageBaseUrl");
-
-        if (!string.IsNullOrWhiteSpace(directBaseUrl))
+        if (!TryGetPropertyIgnoreCase(root, "replay", out var replaySection)
+            || replaySection.ValueKind != JsonValueKind.Object)
         {
-            return directBaseUrl;
+            return new ReplayConfig(string.Empty, false, configPath);
         }
 
-        if (TryGetPropertyIgnoreCase(root, "replay", out var replaySection)
-            && replaySection.ValueKind == JsonValueKind.Object)
-        {
-            return ReadOptionalString(replaySection,
-                                      "storage_base_url",
-                                      "storageBaseUrl",
-                                      "base_url",
-                                      "baseUrl",
-                                      "url");
-        }
+        var storageBaseUrl = ReadOptionalString(replaySection,
+                                                "storage_base_url",
+                                                "storageBaseUrl");
 
-        return null;
+        var uploadNonBest  = ReadOptionalBool(replaySection,
+                                              "upload_non_personal_best",
+                                              "uploadNonPersonalBest")
+                            ?? false;
+
+        return new ReplayConfig(storageBaseUrl ?? string.Empty, uploadNonBest, configPath);
     }
 
     private static string ResolveConnectionString(IConfiguration configuration)
@@ -334,6 +349,29 @@ public class SqlRequestManager : IModSharpModule
             if (!string.IsNullOrWhiteSpace(value))
             {
                 return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool? ReadOptionalBool(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var name in propertyNames)
+        {
+            if (!TryGetPropertyIgnoreCase(element, name, out var property))
+            {
+                continue;
+            }
+
+            switch (property.ValueKind)
+            {
+                case JsonValueKind.True:  return true;
+                case JsonValueKind.False: return false;
+                case JsonValueKind.String when bool.TryParse(property.GetString(), out var parsed):
+                    return parsed;
+                default:
+                    throw new InvalidDataException($"Invalid bool field for config: {name}.");
             }
         }
 

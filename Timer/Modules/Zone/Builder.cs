@@ -26,7 +26,6 @@ using Sharp.Shared.HookParams;
 using Sharp.Shared.Types;
 using Source2Surf.Timer.Extensions;
 using Source2Surf.Timer.Modules.Zone;
-using Source2Surf.Timer.Shared.Models.Zone;
 using ZLinq;
 
 // ReSharper disable once CheckNamespace
@@ -54,7 +53,7 @@ internal partial class ZoneModule
         var eyepos = pawn.GetEyePosition();
         eyepos.Z -= 2f;
 
-        var direction = pawn.GetEyeAngles().AnglesToVectorForward();
+        pawn.GetEyeAngles().AnglesToVectorSource2(out var direction, out _, out _);
 
         var end = eyepos + (direction * 1024.0f);
 
@@ -67,6 +66,8 @@ internal partial class ZoneModule
         const int snapGrid = 2;
 
         var snapped = SnapToGrid(result.EndPosition + new Vector(0, 0, 3), snapGrid);
+
+        // TODO: find a better way to visualize the zone, beams are fucked
 
         RenderDirectionBeam(buildInfo, eyepos, snapped);
         RenderSnapBeams(buildInfo, snapped, snapGrid);
@@ -154,12 +155,12 @@ internal partial class ZoneModule
         var snapBeams = buildInfo.SnapBeams;
 
         // forward <-> backwards
-        snapBeams[0].SetAbsOrigin(snapped             + ((new Vector(1,  0, 0) * snapGrid) / 2));
-        snapBeams[0].SetNetVar("m_vecEndPos", snapped + ((new Vector(-1, 0, 0) * snapGrid) / 2));
+        snapBeams[0].SetAbsOrigin(snapped             + new Vector(1, 0, 0)  * snapGrid / 2);
+        snapBeams[0].SetNetVar("m_vecEndPos", snapped + new Vector(-1, 0, 0) * snapGrid / 2);
 
         // left <-> right
-        snapBeams[1].SetAbsOrigin(snapped             + ((new Vector(0, -1, 0) * snapGrid) / 2));
-        snapBeams[1].SetNetVar("m_vecEndPos", snapped + ((new Vector(0, 1,  0) * snapGrid) / 2));
+        snapBeams[1].SetAbsOrigin(snapped             + new Vector(0, -1, 0) * snapGrid / 2);
+        snapBeams[1].SetNetVar("m_vecEndPos", snapped + new Vector(0, 1, 0)  * snapGrid / 2);
     }
 
     private void RenderDirectionBeam(BuildZoneInfo buildInfo, Vector eyepos, Vector snapped)

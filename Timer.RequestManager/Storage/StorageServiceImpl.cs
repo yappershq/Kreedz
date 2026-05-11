@@ -60,6 +60,63 @@ internal sealed partial class StorageServiceImpl : IRequestManager
         {
             _logger.LogError(e, "Error when initializing tables");
         }
+
+        MigrateReplaySteamIdColumn();
+    }
+
+    private void MigrateReplaySteamIdColumn()
+    {
+        const string tableName  = "surf_runs_replay";
+        const string columnName = "SteamId";
+
+        try
+        {
+            if (!_db.DbMaintenance.IsAnyTable(tableName, false))
+            {
+                return;
+            }
+
+            var columns = _db.DbMaintenance.GetColumnInfosByTableName(tableName, false);
+
+            var steamIdCol = columns?.Find(c => string.Equals(c.DbColumnName, columnName, StringComparison.OrdinalIgnoreCase));
+
+            if (steamIdCol is null)
+            {
+                return;
+            }
+
+            var rawType = steamIdCol.DataType?.Trim().ToLowerInvariant() ?? string.Empty;
+
+            if (rawType is "bigint" or "int8" or "long")
+            {
+                return;
+            }
+
+            _logger.LogWarning("Migrating {Table}.{Column} from '{Type}' to BIGINT (steam64 stored as signed Int64)",
+                               tableName, columnName, rawType);
+
+            var dbType = _db.CurrentConnectionConfig.DbType;
+
+            var sql = dbType switch
+            {
+                DbType.MySql      => $"ALTER TABLE `{tableName}` MODIFY COLUMN `{columnName}` BIGINT NOT NULL",
+                DbType.PostgreSQL => $"ALTER TABLE \"{tableName}\" ALTER COLUMN \"{columnName}\" TYPE BIGINT USING \"{columnName}\"::bigint",
+                _                 => null,
+            };
+
+            if (sql is null)
+            {
+                _logger.LogError("Unsupported DbType {DbType} for {Table}.{Column} migration", dbType, tableName, columnName);
+                return;
+            }
+
+            _db.Ado.ExecuteCommand(sql);
+            _logger.LogInformation("Migrated {Table}.{Column} to BIGINT", tableName, columnName);
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Failed to migrate {Table}.{Column} to BIGINT", tableName, columnName);
+        }
     }
 
     public void Shutdown()

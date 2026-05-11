@@ -31,6 +31,8 @@ internal sealed class ReplayProviderProxy
 
     public bool IsAvailable => Volatile.Read(ref _provider) is not null;
 
+    public bool UploadNonPersonalBest => Volatile.Read(ref _provider)?.UploadNonPersonalBest ?? false;
+
     public ReplayProviderProxy(ISharedSystem shared, ILogger<ReplayProviderProxy> logger)
     {
         _shared   = shared;

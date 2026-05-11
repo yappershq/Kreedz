@@ -27,6 +27,12 @@ public interface IReplayProvider
     static readonly string Identity = typeof(IReplayProvider).FullName!;
 
     /// <summary>
+    /// If true, the provider accepts uploads for runs that are NOT a new personal best.
+    /// When false (default), only PB / WR replays are uploaded.
+    /// </summary>
+    bool UploadNonPersonalBest => false;
+
+    /// <summary>
     /// Gets replay binary data for the specified map, style, and track.
     /// When steamId is null, returns the world record (WR) replay; otherwise returns the specified player's best replay.
     /// </summary>
