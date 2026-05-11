@@ -32,6 +32,8 @@ using Source2Surf.Timer.Shared;
 using Source2Surf.Timer.Shared.Interfaces;
 using Source2Surf.Timer.Shared.Interfaces.Listeners;
 using Source2Surf.Timer.Shared.Models.Zone;
+using Source2Surf.Timer.Types;
+using Source2Surf.Timer.Utilities;
 
 namespace Source2Surf.Timer.Modules;
 
@@ -588,34 +590,97 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
             return;
         }
 
-        var p1 = val.Corner1;
-        var p2 = val.Corner2;
+        var edgesToDraw = new List<Edge>();
 
-        Span<Vector> points =
-        [
-            p1,                     // back,  left,  bottom
-            new (p1.X, p2.Y, p1.Z), // back,  right, bottom
-            new (p2.X, p2.Y, p1.Z), // front, right, bottom
-            new (p2.X, p1.Y, p1.Z), // front, left,  bottom
-        ];
+        if (val.Prebuilt)
+        {
+            if (_bridge.EntityManager.FindEntityByIndex<IBaseModelEntity>(val.Index) is { } entity)
+            {
+                var modelPath = entity.GetBodyComponent()?.GetSceneNode()?.AsSkeletonInstance?.GetModelState().ModelName ?? "";
+
+                var kv3 = _bridge.ModSharp.CreateKeyValues3(KeyValues3Type.Null, KeyValues3SubType.Null);
+
+                try
+                {
+                    if (kv3.LoadFromCompiledFile(modelPath, "GAME", ResourceBlockType.PHYS, out var error))
+                    {
+                        var localEdges = MeshPerimeterExtractor.ExtractPerimeterEdges(kv3, true);
+
+                        var origin = entity.GetAbsOrigin();
+
+                        foreach (var edge in localEdges)
+                        {
+                            var worldV1 = edge.V1 + origin;
+                            var worldV2 = edge.V2 + origin;
+
+                            edgesToDraw.Add(new Edge(worldV1, worldV2));
+                        }
+                    }
+                }
+                finally
+                {
+                    kv3.DeleteThis();
+                }
+            }
+        }
+        else
+        {
+            // Calculate a complete 3D wireframe for manual AABB zones
+            var p1 = val.Corner1; // Min bounds
+            var p2 = val.Corner2; // Max bounds
+
+            // Bottom Corners
+            var b0 = new Vector(p1.X, p1.Y, p1.Z);
+            var b1 = new Vector(p2.X, p1.Y, p1.Z);
+            var b2 = new Vector(p2.X, p2.Y, p1.Z);
+            var b3 = new Vector(p1.X, p2.Y, p1.Z);
+
+            // Top Corners
+            var t0 = new Vector(p1.X, p1.Y, p2.Z);
+            var t1 = new Vector(p2.X, p1.Y, p2.Z);
+            var t2 = new Vector(p2.X, p2.Y, p2.Z);
+            var t3 = new Vector(p1.X, p2.Y, p2.Z);
+
+            // Add Bottom Edges
+            edgesToDraw.Add(new Edge(b0, b1));
+            edgesToDraw.Add(new Edge(b1, b2));
+            edgesToDraw.Add(new Edge(b2, b3));
+            edgesToDraw.Add(new Edge(b3, b0));
+
+            // Add Top Edges
+            edgesToDraw.Add(new Edge(t0, t1));
+            edgesToDraw.Add(new Edge(t1, t2));
+            edgesToDraw.Add(new Edge(t2, t3));
+            edgesToDraw.Add(new Edge(t3, t0));
+
+            // Add Vertical Pillars
+            edgesToDraw.Add(new Edge(b0, t0));
+            edgesToDraw.Add(new Edge(b1, t1));
+            edgesToDraw.Add(new Edge(b2, t2));
+            edgesToDraw.Add(new Edge(b3, t3));
+        }
+
+        if (edgesToDraw.Count == 0)
+            return;
 
         var kv = new Dictionary<string, KeyValuesVariantValueItem>
         {
             { "rendercolor", val.ZoneType == EZoneType.Start ? "0 255 0" : "255 0 0" },
-            { "BoltWidth", "6" },
+            { "boltwidth", "3" },
         };
 
-        val.Beams = new IBaseEntity[points.Length];
+        val.Beams = new IBaseEntity[edgesToDraw.Count];
 
-        for (var i = 0; i < points.Length; i++)
+        for (var i = 0; i < edgesToDraw.Count; i++)
         {
             if (_bridge.EntityManager.SpawnEntitySync<IBaseModelEntity>("env_beam", kv) is not { IsValidEntity: true } beam)
             {
                 continue;
             }
 
-            beam.SetAbsOrigin(points[i]);
-            beam.SetNetVar("m_vecEndPos", points[i == 3 ? 0 : i + 1]);
+            beam.SetAbsOrigin(edgesToDraw[i].V1);
+            beam.SetNetVar("m_vecEndPos", edgesToDraw[i].V2);
+
             val.Beams[i] = beam;
         }
     }
