@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
@@ -83,6 +84,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
     private readonly IConVar timer_replay_file_compression_level;
     private readonly IConVar timer_replay_file_compression_workers;
     private readonly IConVar timer_replay_pending_timeout;
+    private readonly IConVar timer_replay_fallback_ttl;
 
     // ReSharper restore InconsistentNaming
 
@@ -131,6 +133,14 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                 300.0f,
                                                 "Timeout in seconds for pending replay before fallback save")!;
 
+        timer_replay_fallback_ttl
+            = bridge.ConVarManager.CreateConVar("timer_replay_fallback_ttl",
+                                                15.0f,
+                                                1.0f,
+                                                1440.0f,
+                                                "Minutes a fallback replay record waits for OnRecordSaved before being discarded")
+            !;
+
         _replayDirectory = Path.Combine(bridge.TimerDataPath, "replays");
     }
 
@@ -164,8 +174,12 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
     public void OnServerActivate()
     {
-        // TTL cleanup: only remove entries older than 10 minutes.
-        var                   expiryCutoff = DateTime.UtcNow.AddMinutes(-10);
+        // Restore any fallback records persisted from a previous session before doing TTL cleanup,
+        // so a late OnRecordSaved after a crash/restart can still find its .tmp.
+        LoadFallbackRecordsFromDisk();
+
+        // TTL cleanup: drop entries older than timer_replay_fallback_ttl.
+        var                   expiryCutoff = DateTime.UtcNow.AddMinutes(-timer_replay_fallback_ttl.GetFloat());
         List<ReplayMatchKey>? expiredKeys  = null;
 
         foreach (var (key, record) in _fallbackRecords)
@@ -181,7 +195,22 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         {
             foreach (var key in expiredKeys)
             {
-                _fallbackRecords.Remove(key);
+                if (_fallbackRecords.Remove(key, out var fallback))
+                {
+                    DeleteFallbackSidecar(fallback.TempFilePath);
+
+                    try
+                    {
+                        if (File.Exists(fallback.TempFilePath))
+                        {
+                            File.Delete(fallback.TempFilePath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete expired fallback temp file: {Path}", fallback.TempFilePath);
+                    }
+                }
 
                 _logger.LogWarning("Removed expired fallback record on map activate for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId}",
                                    key.SteamId,
@@ -192,7 +221,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
             }
         }
 
-        // Orphaned temp file cleanup
+        // Orphaned temp file cleanup (>24h, no matching sidecar in-flight)
         try
         {
             if (Directory.Exists(_replayDirectory))
@@ -208,12 +237,34 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                         if (creationTime < cutoff)
                         {
                             File.Delete(tmpFile);
+                            DeleteFallbackSidecar(tmpFile);
                             _logger.LogInformation("Deleted orphaned temp replay file: {Path}", tmpFile);
                         }
                     }
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "Failed to delete orphaned temp file: {Path}", tmpFile);
+                    }
+                }
+
+                // Orphaned sidecar cleanup (.idx without a corresponding .tmp)
+                foreach (var sidecarFile in Directory.GetFiles(_replayDirectory,
+                                                               "*.tmp" + FallbackSidecarSuffix,
+                                                               SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var tmpPath = sidecarFile[..^FallbackSidecarSuffix.Length];
+
+                        if (!File.Exists(tmpPath))
+                        {
+                            File.Delete(sidecarFile);
+                            _logger.LogInformation("Deleted orphaned fallback sidecar: {Path}", sidecarFile);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete orphaned sidecar: {Path}", sidecarFile);
                     }
                 }
             }
@@ -427,16 +478,19 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
             frame.StagePostFrameTimer = _bridge.ModSharp.PushTimer(() =>
                                                                    {
+                                                                       frame.StagePostFrameTimer = null;
+
                                                                        var startTick = Math.Max(0,
                                                                            timerStartTick - preRunFrameLength);
 
-                                                                       CreateAndStoreStageReplay(frame,
+                                                                       var snapshot = ReplayShared.CreateStageReplaySnapshot(frame,
                                                                            startTick,
                                                                            timerStartTick,
                                                                            newStageTicks,
                                                                            postRunFrameLength,
-                                                                           finishedStage,
                                                                            time);
+
+                                                                       StorePendingReplay(frame, snapshot, finishedStage);
 
                                                                        return TimerAction.Stop;
                                                                    },
@@ -475,7 +529,9 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                               }
 
                                                               frame.StagePostFrameTimer = null;
-                                                              CreateAndStorePendingReplay(slot, frame);
+
+                                                              var snapshot = ReplayShared.CreateMainReplaySnapshot(frame);
+                                                              StorePendingReplay(frame, snapshot, stage: 0);
 
                                                               return TimerAction.Stop;
                                                           },
@@ -545,139 +601,41 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
     }
 
     /// <summary>
-    ///     Creates a main replay snapshot, then either processes it directly
-    ///     (if PendingMainRecordResult is set) or stores it in PendingReplayStore
-    ///     with a timeout timer.
+    ///     Validates and stores a replay snapshot. If the matching record save already
+    ///     arrived (PendingMainRecordResult / PendingStageRecordResults), the replay is
+    ///     processed directly. Otherwise it lands in PendingReplayStore with a timeout
+    ///     timer that falls back to disk if the record save never arrives.
     /// </summary>
-    private void CreateAndStorePendingReplay(PlayerSlot slot, PlayerFrameData frame)
+    private void StorePendingReplay(PlayerFrameData frame, ReplaySaveSnapshot snapshot, int stage)
     {
-        var style = frame.Style;
-        var track = frame.Track;
-
-        var snapshot = ReplayShared.CreateMainReplaySnapshot(frame);
+        var style   = frame.Style;
+        var track   = frame.Track;
+        var isStage = stage > 0;
 
         if (snapshot.Frames.Count < MinValidFrames)
         {
-            _logger.LogDebug("Discarding main replay snapshot for {SteamId} style={Style} track={Track}: "
-                             + "only {FrameCount} frames (min {MinFrames})",
-                             frame.SteamId,
-                             style,
-                             track,
-                             snapshot.Frames.Count,
-                             MinValidFrames);
+            if (isStage)
+            {
+                _logger.LogDebug("Discarding stage replay snapshot for {SteamId} style={Style} track={Track} stage={Stage}: "
+                                 + "only {FrameCount} frames (min {MinFrames})",
+                                 frame.SteamId, style, track, stage, snapshot.Frames.Count, MinValidFrames);
+            }
+            else
+            {
+                _logger.LogDebug("Discarding main replay snapshot for {SteamId} style={Style} track={Track}: "
+                                 + "only {FrameCount} frames (min {MinFrames})",
+                                 frame.SteamId, style, track, snapshot.Frames.Count, MinValidFrames);
+            }
 
             return;
         }
 
         // Temp file in same directory as final → atomic same-partition File.Move
-        var tempPath = ReplayShared.BuildMainReplayPath(_replayDirectory,
-                                                        _bridge.GlobalVars.MapName,
-                                                        style,
-                                                        track,
-                                                        null);
+        var mapName = _bridge.GlobalVars.MapName;
 
-        tempPath = Path.ChangeExtension(tempPath, ".tmp");
-
-        var mapId = _mapInfoModule.GetCurrentMapProfile().MapId;
-
-        var key = new ReplayMatchKey(mapId,
-                                     frame.SteamId.AsPrimitive(),
-                                     style,
-                                     track,
-                                     0,
-                                     frame.AttemptId);
-
-        // Record arrived before post-frame ended — process directly.
-        if (frame.PendingMainRecordResult is { } pendingResult)
-        {
-            frame.PendingMainRecordResult = null;
-
-            var pending = new PendingReplay { Snapshot = snapshot, TempFilePath = tempPath };
-
-            ProcessPendingReplay(pending, key, pendingResult.RunId, pendingResult.RecordEvent);
-
-            return;
-        }
-
-        var pendingReplay = new PendingReplay { Snapshot = snapshot, TempFilePath = tempPath };
-
-        var replaced = _pendingReplayStore.Add(key, pendingReplay);
-
-        if (replaced is not null)
-        {
-            _logger.LogWarning("Replaced existing PendingReplay for key {Key}", key);
-            SavePendingReplayAsFallback(key, replaced);
-        }
-
-        var timeoutSeconds = timer_replay_pending_timeout.GetFloat();
-        var capturedKey = key;
-
-        var timerId = _bridge.ModSharp.PushTimer(() =>
-                                                 {
-                                                     var timedOut = _pendingReplayStore.TakeMatch(capturedKey);
-
-                                                     if (timedOut is not null)
-                                                     {
-                                                         timedOut.TimeoutTimerId = null;
-
-                                                         _logger
-                                                             .LogWarning("Pending replay timed out for {SteamId} style={Style} track={Track} attemptId={AttemptId}",
-                                                                         capturedKey.SteamId,
-                                                                         capturedKey.Style,
-                                                                         capturedKey.Track,
-                                                                         capturedKey.AttemptId);
-
-                                                         SavePendingReplayAsFallback(capturedKey, timedOut);
-                                                     }
-
-                                                     return TimerAction.Stop;
-                                                 },
-                                                 timeoutSeconds,
-                                                 GameTimerFlags.StopOnMapEnd);
-
-        pendingReplay.TimeoutTimerId = timerId;
-    }
-
-    private void CreateAndStoreStageReplay(PlayerFrameData frame,
-                                           int             startTick,
-                                           int             stageStartFrame,
-                                           int             stageFinishFrame,
-                                           int             postRunFrameCount,
-                                           int             stage,
-                                           float           finishTime)
-    {
-        frame.StagePostFrameTimer = null;
-
-        var style = frame.Style;
-        var track = frame.Track;
-
-        var snapshot = ReplayShared.CreateStageReplaySnapshot(frame,
-                                                              startTick,
-                                                              stageStartFrame,
-                                                              stageFinishFrame,
-                                                              postRunFrameCount,
-                                                              finishTime);
-
-        if (snapshot.Frames.Count < MinValidFrames)
-        {
-            _logger.LogDebug("Discarding stage replay snapshot for {SteamId} style={Style} track={Track} stage={Stage}: "
-                             + "only {FrameCount} frames (min {MinFrames})",
-                             frame.SteamId,
-                             style,
-                             track,
-                             stage,
-                             snapshot.Frames.Count,
-                             MinValidFrames);
-
-            return;
-        }
-
-        var tempPath = ReplayShared.BuildStageReplayPath(_replayDirectory,
-                                                         _bridge.GlobalVars.MapName,
-                                                         style,
-                                                         track,
-                                                         stage,
-                                                         null);
+        var tempPath = isStage
+            ? ReplayShared.BuildStageReplayPath(_replayDirectory, mapName, style, track, stage, null)
+            : ReplayShared.BuildMainReplayPath(_replayDirectory, mapName, style, track, null);
 
         tempPath = Path.ChangeExtension(tempPath, ".tmp");
 
@@ -690,7 +648,24 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                      stage,
                                      frame.AttemptId);
 
-        if (frame.PendingStageRecordResults.TryGetValue(stage, out var pendingResult))
+        // Record arrived before post-frame ended — process directly.
+        PendingRecordResult? pendingResult;
+
+        if (isStage)
+        {
+            frame.PendingStageRecordResults.Remove(stage, out pendingResult);
+        }
+        else
+        {
+            pendingResult = frame.PendingMainRecordResult;
+
+            if (pendingResult is not null)
+            {
+                frame.PendingMainRecordResult = null;
+            }
+        }
+
+        if (pendingResult is not null)
         {
             var pending = new PendingReplay { Snapshot = snapshot, TempFilePath = tempPath };
 
@@ -705,21 +680,29 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         if (replaced is not null)
         {
-            _logger.LogWarning("Replaced existing stage PendingReplay for key {Key}", key);
+            _logger.LogWarning(isStage
+                                   ? "Replaced existing stage PendingReplay for key {Key}"
+                                   : "Replaced existing PendingReplay for key {Key}",
+                               key);
+
             SavePendingReplayAsFallback(key, replaced);
         }
 
         var timeoutSeconds = timer_replay_pending_timeout.GetFloat();
-        var capturedKey = key;
+        var capturedKey    = key;
 
         var timerId = _bridge.ModSharp.PushTimer(() =>
                                                  {
                                                      var timedOut = _pendingReplayStore.TakeMatch(capturedKey);
 
-                                                     if (timedOut is not null)
-                                                     {
-                                                         timedOut.TimeoutTimerId = null;
+                                                     if (timedOut is null)
+                                                         return TimerAction.Stop;
+
+                                                     timedOut.TimeoutTimerId = null;
 #if DEBUG
+
+                                                     if (isStage)
+                                                     {
                                                          _logger
                                                              .LogWarning("Pending stage replay timed out for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId}",
                                                                          capturedKey.SteamId,
@@ -727,9 +710,19 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                                                          capturedKey.Track,
                                                                          capturedKey.Stage,
                                                                          capturedKey.AttemptId);
-#endif
-                                                         SavePendingReplayAsFallback(capturedKey, timedOut);
                                                      }
+                                                     else
+                                                     {
+                                                         _logger
+                                                             .LogWarning("Pending replay timed out for {SteamId} style={Style} track={Track} attemptId={AttemptId}",
+                                                                         capturedKey.SteamId,
+                                                                         capturedKey.Style,
+                                                                         capturedKey.Track,
+                                                                         capturedKey.AttemptId);
+                                                     }
+
+#endif
+                                                     SavePendingReplayAsFallback(capturedKey, timedOut);
 
                                                      return TimerAction.Stop;
                                                  },
@@ -934,6 +927,12 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         var compressionLevel   = timer_replay_file_compression_level.GetInt32();
         var compressionWorkers = timer_replay_file_compression_workers.GetInt32();
 
+        var createdAt = DateTime.UtcNow;
+
+        // Write the sidecar synchronously so a late OnRecordSaved after a process restart
+        // can reassociate the .tmp file with this ReplayMatchKey.
+        WriteFallbackSidecar(tempPath, key, createdAt);
+
         var writeTask = Task.Run(async () =>
         {
             try
@@ -990,7 +989,7 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         {
             TempFilePath = tempPath,
             WriteTask    = writeTask,
-            CreatedAt    = DateTime.UtcNow,
+            CreatedAt    = createdAt,
         };
 
 #if DEBUG
@@ -1003,8 +1002,9 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                            tempPath);
 #endif
 
-        // Expire old entries (> 10 min)
-        var                   expiryCutoff = DateTime.UtcNow.AddMinutes(-10);
+        // Expire old entries (> timer_replay_fallback_ttl)
+        var                   ttlMinutes   = timer_replay_fallback_ttl.GetFloat();
+        var                   expiryCutoff = DateTime.UtcNow.AddMinutes(-ttlMinutes);
         List<ReplayMatchKey>? expiredKeys  = null;
 
         foreach (var (fbKey, fbRecord) in _fallbackRecords)
@@ -1020,14 +1020,18 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         {
             foreach (var expiredKey in expiredKeys)
             {
-                _fallbackRecords.Remove(expiredKey);
+                if (_fallbackRecords.Remove(expiredKey, out var expiredRecord))
+                {
+                    DeleteFallbackSidecar(expiredRecord.TempFilePath);
+                }
 
-                _logger.LogWarning("Removed expired fallback record for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId} (older than 10 minutes)",
+                _logger.LogWarning("Removed expired fallback record for {SteamId} style={Style} track={Track} stage={Stage} attemptId={AttemptId} (older than {Ttl}s)",
                                    expiredKey.SteamId,
                                    expiredKey.Style,
                                    expiredKey.Track,
                                    expiredKey.Stage,
-                                   expiredKey.AttemptId);
+                                   expiredKey.AttemptId,
+                                   ttlMinutes);
             }
         }
     }
@@ -1115,6 +1119,8 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                          logger,
                                          "File.Move",
                                          tempPath).ConfigureAwait(false);
+
+                DeleteFallbackSidecar(tempPath);
             }
             catch (IOException ex)
             {
@@ -1157,22 +1163,25 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                 AttemptResult = attemptResult,
             };
 
+            ReplayContent? deserialized = null;
+
+            if (replayBytes is not null
+                && ReplayShared.DeserializeReplay(replayBytes, style, track, stage, logger) is { } loaded)
+            {
+                deserialized = loaded.Content;
+            }
+
             var isNewBest = false;
 
-            await bridge.ModSharp.InvokeFrameActionAsync(() =>
+            if (deserialized is { } content)
             {
-                if (replayBytes is not null)
+                await bridge.ModSharp.InvokeFrameActionAsync(() =>
                 {
-                    var loadResult = ReplayShared.DeserializeReplay(replayBytes, style, track, stage, logger);
-
-                    if (loadResult is { } loaded)
-                    {
-                        isNewBest = stage == 0
-                            ? playbackModule.OnNewMainReplaySaved(style, track, loaded.Content, context)
-                            : playbackModule.OnNewStageReplaySaved(style, track, stage, loaded.Content, context);
-                    }
-                }
-            }).ConfigureAwait(false);
+                    isNewBest = stage == 0
+                        ? playbackModule.OnNewMainReplaySaved(style, track, content, context)
+                        : playbackModule.OnNewStageReplaySaved(style, track, stage, content, context);
+                }).ConfigureAwait(false);
+            }
 
             var providerReady = replayProviderProxy.IsAvailable;
             var uploadNonPB   = replayProviderProxy.UploadNonPersonalBest;
@@ -1266,32 +1275,16 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
         });
     }
 
-    private static async Task RetryOnIOException(Func<Task> action, ILogger logger, string operationName, string path)
-    {
-        const int maxRetries = 3;
-        const int delayMs    = 100;
+    private static Task RetryOnIOException(Func<Task> action, ILogger logger, string operationName, string path)
+        => RetryOnIOException<object?>(async () =>
+                                       {
+                                           await action().ConfigureAwait(false);
 
-        for (var attempt = 0; attempt <= maxRetries; attempt++)
-        {
-            try
-            {
-                await action().ConfigureAwait(false);
-
-                return;
-            }
-            catch (IOException) when (attempt < maxRetries)
-            {
-                logger.LogWarning("{Operation} failed on attempt {Attempt}/{MaxRetries} for {Path}, retrying in {Delay}ms",
-                                  operationName,
-                                  attempt + 1,
-                                  maxRetries,
-                                  path,
-                                  delayMs);
-
-                await Task.Delay(delayMs).ConfigureAwait(false);
-            }
-        }
-    }
+                                           return null;
+                                       },
+                                       logger,
+                                       operationName,
+                                       path);
 
     private static async Task<T> RetryOnIOException<T>(Func<Task<T>> action, ILogger logger, string operationName, string path)
     {
@@ -1319,6 +1312,131 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         // This should never be reached due to the when clause, but satisfies the compiler.
         throw new InvalidOperationException("Unreachable");
+    }
+
+    private const string FallbackSidecarSuffix = ".idx";
+
+    private sealed class FallbackSidecarDto
+    {
+        public ulong    MapId     { get; set; }
+        public ulong    SteamId   { get; set; }
+        public int      Style     { get; set; }
+        public int      Track     { get; set; }
+        public int      Stage     { get; set; }
+        public int      AttemptId { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+
+    private void WriteFallbackSidecar(string tempPath, ReplayMatchKey key, DateTime createdAt)
+    {
+        var dto = new FallbackSidecarDto
+        {
+            MapId     = key.MapId,
+            SteamId   = key.SteamId,
+            Style     = key.Style,
+            Track     = key.Track,
+            Stage     = key.Stage,
+            AttemptId = key.AttemptId,
+            CreatedAt = createdAt,
+        };
+
+        try
+        {
+            File.WriteAllText(tempPath + FallbackSidecarSuffix, JsonSerializer.Serialize(dto));
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "Failed to write fallback sidecar at {Path}", tempPath + FallbackSidecarSuffix);
+        }
+    }
+
+    private void DeleteFallbackSidecar(string tempPath)
+    {
+        var sidecarPath = tempPath + FallbackSidecarSuffix;
+
+        try
+        {
+            if (File.Exists(sidecarPath))
+            {
+                File.Delete(sidecarPath);
+            }
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "Failed to delete fallback sidecar at {Path}", sidecarPath);
+        }
+    }
+
+    private void LoadFallbackRecordsFromDisk()
+    {
+        if (!Directory.Exists(_replayDirectory))
+        {
+            return;
+        }
+
+        var ttlMinutes = timer_replay_fallback_ttl.GetFloat();
+        var cutoff     = DateTime.UtcNow.AddMinutes(-ttlMinutes);
+        var loaded     = 0;
+
+        foreach (var sidecarPath in Directory.GetFiles(_replayDirectory,
+                                                       "*.tmp" + FallbackSidecarSuffix,
+                                                       SearchOption.AllDirectories))
+        {
+            var tempPath = sidecarPath[..^FallbackSidecarSuffix.Length];
+
+            try
+            {
+                var json = File.ReadAllText(sidecarPath);
+                var dto  = JsonSerializer.Deserialize<FallbackSidecarDto>(json);
+
+                if (dto is null || !File.Exists(tempPath) || dto.CreatedAt < cutoff)
+                {
+                    TryDelete(sidecarPath);
+                    TryDelete(tempPath);
+
+                    continue;
+                }
+
+                var key = new ReplayMatchKey(dto.MapId, dto.SteamId, dto.Style, dto.Track, dto.Stage, dto.AttemptId);
+
+                _fallbackRecords[key] = new FallbackReplayRecord
+                {
+                    TempFilePath = tempPath,
+                    WriteTask    = Task.CompletedTask,
+                    CreatedAt    = dto.CreatedAt,
+                };
+
+                loaded++;
+            }
+            catch (Exception e)
+            {
+                _logger.LogWarning(e, "Failed to load fallback sidecar at {Path}; deleting", sidecarPath);
+                TryDelete(sidecarPath);
+                TryDelete(tempPath);
+            }
+        }
+
+        if (loaded > 0)
+        {
+            _logger.LogInformation("Restored {Count} fallback replay records from disk", loaded);
+        }
+
+        return;
+
+        void TryDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception e)
+            {
+                _logger.LogWarning(e, "Failed to delete stale file at {Path}", path);
+            }
+        }
     }
 
     private void OnPlayerRunCommandPost(IPlayerRunCommandHookParams arg, HookReturnValue<EmptyHookReturn> hook)

@@ -18,21 +18,26 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Numerics;
 using Source2Surf.Timer.Shared.Models.Replay;
 
 namespace Source2Surf.Timer.Modules.Replay;
 
 /// <summary>
 /// Simple ring buffer to avoid front-shifting allocations when trimming pre-run frames.
+/// Capacity is always a power of two so the wrap can use a bitmask instead of modulo.
 /// </summary>
 internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
 {
     private ReplayFrameData[] _buffer;
     private int               _head;
+    private int               _mask;
 
     public ReplayFrameBuffer(int capacity = 64)
     {
-        _buffer = capacity > 0 ? new ReplayFrameData[capacity] : Array.Empty<ReplayFrameData>();
+        var size = RoundUpToPow2(capacity > 0 ? capacity : 1);
+        _buffer = new ReplayFrameData[size];
+        _mask   = size - 1;
     }
 
     public int Count { get; private set; }
@@ -48,18 +53,15 @@ internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            var realIndex = (_head + index) % _buffer.Length;
-
-            return _buffer[realIndex];
+            return _buffer[(_head + index) & _mask];
         }
     }
 
-    public void Add(ReplayFrameData frame)
+    public void Add(in ReplayFrameData frame)
     {
         EnsureCapacity(Count + 1);
 
-        var tail = (_head + Count) % _buffer.Length;
-        _buffer[tail] = frame;
+        _buffer[(_head + Count) & _mask] = frame;
         Count++;
     }
 
@@ -76,14 +78,14 @@ internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
             return;
         }
 
-        _head = (_head + removeCount) % _buffer.Length;
+        _head =  (_head + removeCount) & _mask;
         Count -= removeCount;
     }
 
     public void Clear()
     {
-        _head  = 0;
-        Count  = 0;
+        _head = 0;
+        Count = 0;
     }
 
     public void EnsureCapacity(int capacity)
@@ -93,19 +95,22 @@ internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
             return;
         }
 
-        var newSize = Math.Max(capacity, _buffer.Length == 0 ? 4 : _buffer.Length * 2);
+        var newSize = RoundUpToPow2(Math.Max(capacity, _buffer.Length * 2));
         var newArr  = new ReplayFrameData[newSize];
 
         // copy existing frames in order
         for (var i = 0; i < Count; i++)
         {
-            var realIndex = (_head + i) % _buffer.Length;
-            newArr[i] = _buffer[realIndex];
+            newArr[i] = _buffer[(_head + i) & _mask];
         }
 
         _buffer = newArr;
+        _mask   = newSize - 1;
         _head   = 0;
     }
+
+    private static int RoundUpToPow2(int n)
+        => n <= 1 ? 1 : (int) BitOperations.RoundUpToPowerOf2((uint) n);
 
     public Enumerator GetEnumerator()
         => new (this);
@@ -128,13 +133,7 @@ internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
         }
 
         public ReplayFrameData Current
-        {
-            get
-            {
-                var realIndex = (_buffer._head + _index) % _buffer._buffer.Length;
-                return _buffer._buffer[realIndex];
-            }
-        }
+            => _buffer._buffer[(_buffer._head + _index) & _buffer._mask];
 
         object IEnumerator.Current => Current;
 
@@ -154,4 +153,3 @@ internal sealed class ReplayFrameBuffer : IReadOnlyList<ReplayFrameData>
         }
     }
 }
-
