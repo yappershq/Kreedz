@@ -304,7 +304,9 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         var data = new PlayerFrameData
         {
-            Frames = new ReplayFrameBuffer(TimerConstants.Tickrate * 60 * 5), SteamId = client.SteamId, Name = client.Name,
+            Frames  = new List<ReplayFrameData>(TimerConstants.Tickrate * 60 * 5),
+            SteamId = client.SteamId,
+            Name    = client.Name,
         };
 
         _playerFrameData[slot] = data;
@@ -1310,7 +1312,6 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
             }
         }
 
-        // This should never be reached due to the when clause, but satisfies the compiler.
         throw new InvalidOperationException("Unreachable");
     }
 
@@ -1318,13 +1319,13 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
     private sealed class FallbackSidecarDto
     {
-        public ulong    MapId     { get; set; }
-        public ulong    SteamId   { get; set; }
-        public int      Style     { get; set; }
-        public int      Track     { get; set; }
-        public int      Stage     { get; set; }
-        public int      AttemptId { get; set; }
-        public DateTime CreatedAt { get; set; }
+        public ulong    MapId     { get; init; }
+        public ulong    SteamId   { get; init; }
+        public int      Style     { get; init; }
+        public int      Track     { get; init; }
+        public int      Stage     { get; init; }
+        public int      AttemptId { get; init; }
+        public DateTime CreatedAt { get; init; }
     }
 
     private void WriteFallbackSidecar(string tempPath, ReplayMatchKey key, DateTime createdAt)

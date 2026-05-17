@@ -250,7 +250,7 @@ internal static class ReplayShared
         // worst-case buffer forever.
         var baseline    = TimerConstants.Tickrate * 60 * 5;
         var newCapacity = Math.Max(baseline, framesBuffer.Count * 2);
-        frame.Frames    = new ReplayFrameBuffer(newCapacity);
+        frame.Frames    = new List<ReplayFrameData>(newCapacity);
 
         var header = new ReplayFileHeader
         {
@@ -319,7 +319,7 @@ internal static class ReplayShared
 
         if (excess > 0)
         {
-            frameData.Frames.RemoveOldest(excess);
+            frameData.Frames.RemoveRange(0, excess);
         }
     }
 
