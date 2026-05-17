@@ -79,6 +79,11 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
     private readonly Dictionary<uint, ZoneInfo> _zones         = [];
     private readonly BuildZoneInfo?[]           _buildZoneInfo;
 
+    private const int ZoneTypeCount = (int) EZoneType.Max;
+
+    private readonly List<ZoneInfo>[,] _zonesByTrackType
+        = new List<ZoneInfo>[TimerConstants.MAX_TRACK, ZoneTypeCount];
+
     // ReSharper disable InconsistentNaming
     private unsafe delegate* unmanaged<Vector*, Vector*, Vector*, nint> CreateTrigger;
 
@@ -95,6 +100,14 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         _commandManager = commandManager;
         _requestManager = requestManager;
         _buildZoneInfo  = new BuildZoneInfo?[PlayerSlot.MaxPlayerCount];
+
+        for (var t = 0; t < TimerConstants.MAX_TRACK; t++)
+        {
+            for (var z = 0; z < ZoneTypeCount; z++)
+            {
+                _zonesByTrackType[t, z] = [];
+            }
+        }
     }
 
     public void OnEntitySpawned(IBaseEntity entity)
@@ -160,6 +173,8 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
     {
         if (!_zones.Remove(entity.Handle.GetValue(), out var info))
             return;
+
+        UnindexZone(info);
 
 #if DEBUG
         _logger.LogWarning("Removed zone {t}", info.TargetName);
@@ -246,6 +261,14 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         }
 
         _zones.Clear();
+
+        for (var t = 0; t < TimerConstants.MAX_TRACK; t++)
+        {
+            for (var z = 0; z < ZoneTypeCount; z++)
+            {
+                _zonesByTrackType[t, z].Clear();
+            }
+        }
     }
 
     public void OnServerActivate()
@@ -395,7 +418,10 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         info.Origin = origin;
         info.Index  = ent.Index;
 
-        _zones.TryAdd(ent.Handle.GetValue(), info);
+        if (_zones.TryAdd(ent.Handle.GetValue(), info))
+        {
+            IndexZone(info);
+        }
 
         if (info.ZoneType is EZoneType.Start or EZoneType.End)
         {
@@ -405,26 +431,28 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
     public bool TeleportToZone(IPlayerPawn pawn, int track, EZoneType type)
     {
-        foreach (var (_, zoneInfo) in _zones)
+        if (GetZoneBucket(track, type) is not { Count: > 0 } bucket)
         {
-            if (zoneInfo.Track != track || type != zoneInfo.ZoneType)
-            {
-                continue;
-            }
-
-            pawn.Teleport(zoneInfo.TeleportOrigin ?? zoneInfo.Origin, null, new Vector());
-
-            return true;
+            return false;
         }
 
-        return false;
+        var zoneInfo = bucket[0];
+
+        pawn.Teleport(zoneInfo.TeleportOrigin ?? zoneInfo.Origin, null, new Vector());
+
+        return true;
     }
 
     public bool TeleportToStage(IPlayerPawn pawn, int track, int stage)
     {
-        foreach (var (_, zoneInfo) in _zones)
+        if (GetZoneBucket(track, EZoneType.Stage) is not { Count: > 0 } bucket)
         {
-            if (zoneInfo.Track != track || zoneInfo.ZoneType != EZoneType.Stage || zoneInfo.Data != stage)
+            return false;
+        }
+
+        foreach (var zoneInfo in bucket)
+        {
+            if (zoneInfo.Data != stage)
             {
                 continue;
             }
@@ -441,47 +469,28 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         => _currentMaxStages[track] <= 1;
 
     public bool HasZone(int track, EZoneType type)
-    {
-        foreach (var (_, info) in _zones)
-        {
-            if (info.Track == track && info.ZoneType == type)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => GetZoneBucket(track, type) is { Count: > 0 };
 
     public bool CurrentTrackHasCheckpoints(int track)
-    {
-        foreach (var (_, info) in _zones)
-        {
-            if (info.Track == track && info.ZoneType == EZoneType.Checkpoint)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => GetZoneBucket(track, EZoneType.Checkpoint) is { Count: > 0 };
 
     public int GetTotalStages(int track)
         => _currentMaxStages[track];
 
     public int GetCurrentTrackCheckpointCount(int track)
-    {
-        var count = 0;
+        => GetZoneBucket(track, EZoneType.Checkpoint)?.Count ?? 0;
 
-        foreach (var (_, info) in _zones)
+    private List<ZoneInfo>? GetZoneBucket(int track, EZoneType type)
+    {
+        var typeIndex = (int) type;
+
+        if ((uint) track        >= TimerConstants.MAX_TRACK
+            || (uint) typeIndex >= ZoneTypeCount)
         {
-            if (info.Track == track && info.ZoneType == EZoneType.Checkpoint)
-            {
-                count++;
-            }
+            return null;
         }
 
-        return count;
+        return _zonesByTrackType[track, typeIndex];
     }
 
     private bool AddPrebuiltZone(IBaseEntity entity, string targetName, EZoneType type)
@@ -518,7 +527,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
             {
                 if (!ZoneMatcher.IsBonusStartZone(targetName, out track))
                 {
-                    return ZoneMatcher.IsStartZone(targetName) && _zones.TryAdd(handle, info);
+                    return ZoneMatcher.IsStartZone(targetName) && TryAddZoneToIndex(handle, info);
                 }
 
                 if (_currentMaxStages[track] < 1)
@@ -528,18 +537,18 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
                 info.Track = track;
 
-                return _zones.TryAdd(handle, info);
+                return TryAddZoneToIndex(handle, info);
             }
             case EZoneType.End:
             {
                 if (!ZoneMatcher.IsBonusEndZone(targetName, out track))
                 {
-                    return ZoneMatcher.IsEndZone(targetName) && _zones.TryAdd(handle, info);
+                    return ZoneMatcher.IsEndZone(targetName) && TryAddZoneToIndex(handle, info);
                 }
 
                 info.Track = track;
 
-                return _zones.TryAdd(handle, info);
+                return TryAddZoneToIndex(handle, info);
             }
             case EZoneType.Stage:
             {
@@ -555,7 +564,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
                 info.Data = stage;
 
-                return _zones.TryAdd(handle, info);
+                return TryAddZoneToIndex(handle, info);
             }
             case EZoneType.Checkpoint:
             {
@@ -563,7 +572,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                 {
                     info.Data = cp;
 
-                    return _zones.TryAdd(handle, info);
+                    return TryAddZoneToIndex(handle, info);
                 }
 
                 if (ZoneMatcher.IsBonusCheckpointZone(targetName, out var bonusTrack, out cp))
@@ -571,7 +580,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                     info.Track = bonusTrack;
                     info.Data  = cp;
 
-                    return _zones.TryAdd(handle, info);
+                    return TryAddZoneToIndex(handle, info);
                 }
 
                 break;
@@ -579,6 +588,55 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         }
 
         return false;
+    }
+
+    private bool TryAddZoneToIndex(uint handle, ZoneInfo info)
+    {
+        if (!_zones.TryAdd(handle, info))
+        {
+            return false;
+        }
+
+        IndexZone(info);
+        return true;
+    }
+
+    private void IndexZone(ZoneInfo info)
+    {
+        var typeIndex = (int) info.ZoneType;
+
+        if (typeIndex is < 0 or >= ZoneTypeCount)
+        {
+            return;
+        }
+
+        var track = info.Track;
+
+        if ((uint) track >= TimerConstants.MAX_TRACK)
+        {
+            return;
+        }
+
+        _zonesByTrackType[track, typeIndex].Add(info);
+    }
+
+    private void UnindexZone(ZoneInfo info)
+    {
+        var typeIndex = (int) info.ZoneType;
+
+        if (typeIndex is < 0 or >= ZoneTypeCount)
+        {
+            return;
+        }
+
+        var track = info.Track;
+
+        if ((uint) track >= TimerConstants.MAX_TRACK)
+        {
+            return;
+        }
+
+        _zonesByTrackType[track, typeIndex].Remove(info);
     }
 
     private void CreateBeam(uint handle)

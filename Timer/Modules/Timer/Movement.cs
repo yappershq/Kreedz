@@ -139,37 +139,53 @@ internal partial class TimerModule
             return;
         }
 
-        if (_timerInfo[client.Slot] is not { } timerInfo || _stageTimerInfo[client.Slot] is not { } stageTimer)
+        var slot = client.Slot;
+
+        if (_timerInfo[slot] is not { } timerInfo || _stageTimerInfo[slot] is not { } stageTimer)
         {
             return;
         }
 
+        var mainRunning  = timerInfo.IsTimerRunning();
+        var stageRunning = stageTimer.IsTimerRunning();
+
+        if (!mainRunning && !stageRunning)
+        {
+            return;
+        }
+
+        var service  = arg.Service;
+        var origin   = pawn.GetAbsOrigin();
         var angles   = pawn.GetEyeAngles();
         var velocity = pawn.GetAbsVelocity();
 
-        var service = arg.Service;
+        var onGround = pawn.GroundEntityHandle.IsValid();
+
+        var isSurfing = false;
+
+        if (!onGround)
+        {
+            var hull = service.GetNetVar<bool>("m_bDucked") ? DuckedHull : StandingHull;
+
+            var collision = pawn.GetCollisionProperty()!;
+
+            var end = origin;
+            end.Z -= 54;
+
+            var attribute = RnQueryShapeAttr.PlayerMovement(collision.CollisionAttribute.InteractsWith);
+            attribute.SetEntityToIgnore(pawn, 0);
+
+            var result = _bridge.PhysicsQueryManager.TraceShapePlayerMovement(new (hull),
+                                                                              origin,
+                                                                              end,
+                                                                              attribute);
+
+            isSurfing = result.DidHit() && Math.Abs(result.PlaneNormal.Z) < sv_standable_normal.GetFloat();
+        }
 
         var leftmove = service.GetNetVar<float>("m_flLeftMove");
 
-        var collision = pawn.GetCollisionProperty()!;
-
-        var hull = service.GetNetVar<bool>("m_bDucked") ? DuckedHull : StandingHull;
-
-        var origin = pawn.GetAbsOrigin();
-        var end    = origin;
-        end.Z -= 54;
-
-        var attribute = RnQueryShapeAttr.PlayerMovement(collision.CollisionAttribute.InteractsWith);
-        attribute.SetEntityToIgnore(pawn, 0);
-
-        var result = _bridge.PhysicsQueryManager.TraceShapePlayerMovement(new (hull),
-                                                                          origin,
-                                                                          end,
-                                                                          attribute);
-
-        var isSurfing = result.DidHit() && Math.Abs(result.PlaneNormal.Z) < sv_standable_normal.GetFloat();
-
-        if (timerInfo.IsTimerRunning())
+        if (mainRunning)
         {
             timerInfo.TimerTick++;
 
@@ -196,7 +212,7 @@ internal partial class TimerModule
             timerInfo.LastYaw = angles.Y;
         }
 
-        if (stageTimer.IsTimerRunning())
+        if (stageRunning)
         {
             stageTimer.TimerTick++;
 

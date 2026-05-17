@@ -57,15 +57,15 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
     private readonly IPlayerManager _playerManager;
     private readonly ILogger<ReplayPlaybackModule> _logger;
 
-    // Replay caches
-    private readonly Dictionary<(int style, int track), ReplayContent>            _replayCache      = [];
-    private readonly Dictionary<(int style, int track, int stage), ReplayContent> _stageReplayCache = [];
+    // Replay cache: stage == 0 means main; stage >= 1 means stage replay
+    private readonly Dictionary<(int style, int track, int stage), ReplayContent> _replayCache = [];
 
     // Bot management
     private readonly bool                _hasNoBotParam;
     private readonly List<ReplayBotData> _replayBots = [];
     private readonly ReplayBotData?[]    _replayBotBySlot;
     private readonly ReplayBotConfig[]   _replayBotConfigs;
+    private readonly bool[]              _configSlotInUse;
 
     // Listener hub
     private readonly ListenerHub<IReplayModuleListener> _replayListenerHub;
@@ -146,6 +146,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         var replayConfigPath = Path.Combine(configDir, "timer-replay.jsonc");
 
         _replayBotConfigs = ReplayShared.LoadReplayBotConfigs(replayConfigPath, logger);
+        _configSlotInUse  = new bool[_replayBotConfigs.Length];
 
         ReplayShared.EnsureReplayDirectories(_replayDirectory);
     }
@@ -224,26 +225,35 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
                 var stopwatch = new Stopwatch();
 
                 var wrKeys = CollectWRKeys();
-                _logger.LogInformation("Found {main} main WRs and {stage} stage WRs",
-                    wrKeys.MainKeys.Count, wrKeys.StageKeys.Count);
 
-                // Collect results into temp dictionaries to avoid writing to main-thread caches from background
-                var mainResults  = new Dictionary<(int, int), ReplayContent>();
-                var stageResults = new Dictionary<(int, int, int), ReplayContent>();
+                var mainKeyCount  = 0;
+                var stageKeyCount = 0;
+
+                foreach (var (_, _, stage, _) in wrKeys)
+                {
+                    if (stage == 0) mainKeyCount++;
+                    else            stageKeyCount++;
+                }
+
+                _logger.LogInformation("Found {main} main WRs and {stage} stage WRs", mainKeyCount, stageKeyCount);
+
+                // Collect results into a temp dictionary to avoid writing to main-thread cache from background
+                var results = new Dictionary<(int style, int track, int stage), ReplayContent>();
 
                 stopwatch.Start();
-                LoadReplaysFromDisk(wrKeys, mainResults, stageResults, linkedToken.Token);
+                LoadReplaysFromDisk(wrKeys, results, linkedToken.Token);
                 stopwatch.Stop();
                 _logger.LogInformation("LoadReplay (disk): {elapsed}", stopwatch.Elapsed);
 
                 stopwatch.Restart();
-                await LoadMissingReplaysFromRemote(wrKeys, mainResults, stageResults, linkedToken.Token);
+                await LoadMissingReplaysFromRemote(wrKeys, results, linkedToken.Token);
                 stopwatch.Stop();
                 _logger.LogInformation("LoadReplay (remote): {elapsed}", stopwatch.Elapsed);
 
                 linkedToken.Token.ThrowIfCancellationRequested();
 
-                // Flush results to main-thread caches
+                // Flush results to main-thread cache, preserving any fresher in-memory replays
+                // (a player can finish a run while load is in-flight; that newer replay must win).
                 await _bridge.ModSharp.InvokeFrameActionAsync(() =>
                                                               {
                                                                   if (linkedToken.IsCancellationRequested)
@@ -251,20 +261,31 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
                                                                       return;
                                                                   }
 
-                                                                  foreach (var (key, content) in mainResults)
+                                                                  foreach (var (key, content) in results)
                                                                   {
-                                                                      _replayCache[key] = content;
-                                                                  }
+                                                                      if (_replayCache.TryGetValue(key, out var existing)
+                                                                          && existing.Header.Time <= content.Header.Time)
+                                                                      {
+                                                                          continue;
+                                                                      }
 
-                                                                  foreach (var (key, content) in stageResults)
-                                                                  {
-                                                                      _stageReplayCache[key] = content;
+                                                                      _replayCache[key]    = content;
+                                                                      UpdateReplayBots(key.style, key.track, key.stage);
                                                                   }
                                                               },
                                                               linkedToken.Token);
 
+                var mainResultCount  = 0;
+                var stageResultCount = 0;
+
+                foreach (var ((_, _, stage), _) in results)
+                {
+                    if (stage == 0) mainResultCount++;
+                    else            stageResultCount++;
+                }
+
                 _logger.LogInformation("Replay cache updated: {main} main, {stage} stage",
-                                       mainResults.Count, stageResults.Count);
+                                       mainResultCount, stageResultCount);
             }
             catch (OperationCanceledException)
             {
@@ -289,8 +310,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
         _replayBots.Clear();
         _replayCache.Clear();
-        _stageReplayCache.Clear();
         Array.Clear(_replayBotBySlot, 0, _replayBotBySlot.Length);
+        Array.Clear(_configSlotInUse, 0, _configSlotInUse.Length);
     }
 
     public void OnClientPutInServer(PlayerSlot slot)
@@ -330,6 +351,19 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
             return;
         }
 
+        var configIndex = FindFreeBotConfigSlot();
+
+        if (configIndex < 0)
+        {
+            _logger.LogWarning("No free replay bot config slot; kicking unexpected bot");
+
+            _bridge.ClientManager.KickClient(client,
+                                             "no",
+                                             NetworkDisconnectionReason.Kicked);
+
+            return;
+        }
+
         var botData = new ReplayBotData
         {
             Controller   = controller,
@@ -339,11 +373,13 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
             Client       = client,
             Status       = EReplayBotStatus.Idle,
             Type         = EReplayBotType.Looping,
-            Config       = _replayBotConfigs[_replayBots.Count],
+            Config       = _replayBotConfigs[configIndex],
+            ConfigIndex  = configIndex,
         };
 
         _replayBots.Add(botData);
-        _replayBotBySlot[slot] = botData;
+        _replayBotBySlot[slot]         = botData;
+        _configSlotInUse[configIndex]  = true;
 
         if (!botData.Config.StageBot)
         {
@@ -366,6 +402,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         {
             if (_replayBots.Find(i => i.Client.Equals(client)) is { } bot)
             {
+                _configSlotInUse[bot.ConfigIndex] = false;
                 _replayBots.Remove(bot);
                 _replayBotBySlot[slot] = null;
             }
@@ -373,28 +410,21 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
     }
 
     public bool OnNewMainReplaySaved(int style, int track, ReplayContent content, ReplaySaveContext context)
-    {
-        if (_replayCache.TryGetValue((style, track), out var existing)
-            && existing.Header.Time <= context.FinishTime)
-        {
-            return false;
-        }
-
-        _replayCache[(style, track)] = content;
-        UpdateMainReplayBots(style, track);
-        return true;
-    }
+        => TryStoreReplay(style, track, 0, content, context);
 
     public bool OnNewStageReplaySaved(int style, int track, int stage, ReplayContent content, ReplaySaveContext context)
+        => TryStoreReplay(style, track, stage, content, context);
+
+    private bool TryStoreReplay(int style, int track, int stage, ReplayContent content, ReplaySaveContext context)
     {
-        if (_stageReplayCache.TryGetValue((style, track, stage), out var existing)
+        if (_replayCache.TryGetValue((style, track, stage), out var existing)
             && existing.Header.Time <= context.FinishTime)
         {
             return false;
         }
 
-        _stageReplayCache[(style, track, stage)] = content;
-        UpdateStageReplayBots(style, track, stage);
+        _replayCache[(style, track, stage)] = content;
+        UpdateReplayBots(style, track, stage);
         return true;
     }
 
@@ -442,7 +472,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         if (_bridge.ClientManager.GetClientCount(true) == 0)
             return;
 
-        if (_replayBots.Count == 0)
+        if (_replayBots.Count < _replayBotConfigs.Length)
         {
             AddReplayBot();
 
@@ -472,23 +502,53 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         }
     }
 
-    private unsafe void AddReplayBot()
+    private int FindFreeBotConfigSlot()
     {
-        mp_randomspawn.Set(1);
-
-        for (var i = 0; i < _replayBotConfigs.Length; i++)
+        for (var i = 0; i < _configSlotInUse.Length; i++)
         {
-            _expectingBot = true;
-
-            if (!CCSBotManager_BotAddCommand(0, Random.Shared.Next(2, 4), 0, 0, CStrikeWeaponType.Unknown, 0))
+            if (!_configSlotInUse[i])
             {
-                _logger.LogError("Failed to add bot");
+                return i;
             }
-
-            _expectingBot = false;
         }
 
-        mp_randomspawn.Set(0);
+        return -1;
+    }
+
+    private unsafe void AddReplayBot()
+    {
+        var toAdd = _replayBotConfigs.Length - _replayBots.Count;
+
+        if (toAdd <= 0)
+        {
+            return;
+        }
+
+        mp_randomspawn.Set(1);
+
+        try
+        {
+            for (var i = 0; i < toAdd; i++)
+            {
+                _expectingBot = true;
+
+                try
+                {
+                    if (!CCSBotManager_BotAddCommand(0, Random.Shared.Next(2, 4), 0, 0, CStrikeWeaponType.Unknown, 0))
+                    {
+                        _logger.LogError("Failed to add bot");
+                    }
+                }
+                finally
+                {
+                    _expectingBot = false;
+                }
+            }
+        }
+        finally
+        {
+            mp_randomspawn.Set(0);
+        }
     }
 
     private void StartReplay(ReplayBotData bot)
@@ -551,7 +611,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
                 continue;
             }
 
-            if (_replayCache.TryGetValue((style, track), out var content))
+            if (_replayCache.TryGetValue((style, track, 0), out var content))
             {
                 bot.Header = content.Header;
                 bot.Frames = content.Frames;
@@ -563,11 +623,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
             }
         }
 
-        if (bot.Track < 0)
-        {
-            bot.Track = 0;
-            bot.Style = 0;
-        }
+        // No replay matched. Keep bot in wildcard state (Track/Style at -1)
+        // so any newly saved replay matches via IsReplayBotMatch.
     }
 
     private void FindNextStageReplay(ReplayBotData bot)
@@ -600,6 +657,12 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
             var stage = idx / (maxTrack * maxStyle);
 
+            // stage=0 entries belong to main replays in the unified cache; skip for stage bots
+            if (stage == 0)
+            {
+                continue;
+            }
+
             var rem = idx % (maxTrack * maxStyle);
 
             var track = rem / maxStyle;
@@ -616,7 +679,7 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
                 continue;
             }
 
-            if (_stageReplayCache.TryGetValue((style, track, stage), out var content))
+            if (_replayCache.TryGetValue((style, track, stage), out var content))
             {
                 bot.Header = content.Header;
                 bot.Frames = content.Frames;
@@ -629,11 +692,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
             }
         }
 
-        if (bot.Track < 0)
-        {
-            bot.Track = 0;
-            bot.Style = 0;
-        }
+        // No replay matched. Keep bot in wildcard state (Track/Style at -1)
+        // so any newly saved replay matches via IsReplayBotMatch.
     }
 
     private void OnPlayerProcessMovementPre(Sharp.Shared.HookParams.IPlayerProcessMoveForwardParams arg)
@@ -799,67 +859,47 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         bot.Client.SetName(name);
     }
 
-    private void UpdateMainReplayBots(int style, int track)
+    private void UpdateReplayBots(int style, int track, int stage)
     {
-        if (!_replayCache.TryGetValue((style, track), out var replayContent))
+        if (!_replayCache.TryGetValue((style, track, stage), out var content))
         {
             return;
         }
 
         foreach (var bot in _replayBots)
         {
-            if (!IsMainReplayBotMatch(bot, style, track))
-            {
-                continue;
-            }
-
-            bot.Frames = replayContent.Frames;
-            bot.Header = replayContent.Header;
-            StartReplay(bot);
-        }
-    }
-
-    private void UpdateStageReplayBots(int style, int track, int stage)
-    {
-        if (!_stageReplayCache.TryGetValue((style, track, stage), out var content))
-        {
-            return;
-        }
-
-        foreach (var bot in _replayBots)
-        {
-            if (!IsStageReplayBotMatch(bot, style, track, stage))
+            if (!IsReplayBotMatch(bot, style, track, stage))
             {
                 continue;
             }
 
             bot.Frames = content.Frames;
             bot.Header = content.Header;
-            bot.Stage  = stage;
+
+            if (stage > 0)
+            {
+                bot.Stage = stage;
+            }
+
             StartReplay(bot);
         }
     }
 
-    private static bool IsMainReplayBotMatch(ReplayBotData bot, int style, int track)
-        => (bot.Style    == style || bot.Style < 0)
-           && (bot.Track == track || bot.Track < 0)
-           && !bot.Config.StageBot;
-
-    private static bool IsStageReplayBotMatch(ReplayBotData bot, int style, int track, int stage)
-        => (bot.Style    == style || bot.Style < 0)
-           && (bot.Track == track || bot.Track < 0)
-           && bot.Config.StageBot
-           && bot.Stage == stage;
-
-    private readonly record struct WRKeySet(
-        List<(int style, int track, RunRecord wr)> MainKeys,
-        List<(int style, int track, int stage, RunRecord wr)> StageKeys
-    );
-
-    private WRKeySet CollectWRKeys()
+    private static bool IsReplayBotMatch(ReplayBotData bot, int style, int track, int stage)
     {
-        var mainKeys  = new List<(int style, int track, RunRecord wr)>();
-        var stageKeys = new List<(int style, int track, int stage, RunRecord wr)>();
+        if ((bot.Style != style && bot.Style >= 0) || (bot.Track != track && bot.Track >= 0))
+        {
+            return false;
+        }
+
+        return stage == 0
+            ? !bot.Config.StageBot
+            : bot.Config.StageBot && bot.Stage == stage;
+    }
+
+    private List<(int style, int track, int stage, RunRecord wr)> CollectWRKeys()
+    {
+        var keys = new List<(int style, int track, int stage, RunRecord wr)>();
 
         var styleCount = _styleModule.GetStyleCount();
 
@@ -869,64 +909,45 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
             {
                 if (_recordModule.GetWR(style, track) is { } wr)
                 {
-                    mainKeys.Add((style, track, wr));
+                    keys.Add((style, track, 0, wr));
                 }
 
                 for (var stage = 1; stage < TimerConstants.MAX_STAGE; stage++)
                 {
                     if (_recordModule.GetWR(style, track, stage) is { } stageWr)
                     {
-                        stageKeys.Add((style, track, stage, stageWr));
+                        keys.Add((style, track, stage, stageWr));
                     }
                 }
             }
         }
 
-        return new WRKeySet(mainKeys, stageKeys);
+        return keys;
     }
 
-    private void LoadReplaysFromDisk(WRKeySet wrKeys,
-                                     Dictionary<(int, int), ReplayContent> mainResults,
-                                     Dictionary<(int, int, int), ReplayContent> stageResults,
+    private void LoadReplaysFromDisk(List<(int style, int track, int stage, RunRecord wr)> wrKeys,
+                                     Dictionary<(int style, int track, int stage), ReplayContent> results,
                                      CancellationToken token)
     {
         var mapName = _bridge.GlobalVars.MapName;
 
-        Parallel.ForEach(wrKeys.MainKeys,
-            new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = Environment.ProcessorCount },
-            () => new Decompressor(),
-            (key, _, decompressor) =>
-            {
-                var (style, track, wr) = key;
-                var filePath = ReplayShared.BuildMainReplayPath(_replayDirectory, mapName, style, track, wr.Id);
-
-                if (File.Exists(filePath)
-                    && ReplayShared.LoadReplayFromPath(filePath, style, track, 0, decompressor, _logger) is { } result)
-                {
-                    lock (mainResults)
-                    {
-                        mainResults[(style, track)] = result.Content;
-                    }
-                }
-
-                return decompressor;
-            },
-            decompressor => decompressor.Dispose());
-
-        Parallel.ForEach(wrKeys.StageKeys,
+        Parallel.ForEach(wrKeys,
             new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = Environment.ProcessorCount },
             () => new Decompressor(),
             (key, _, decompressor) =>
             {
                 var (style, track, stage, wr) = key;
-                var filePath = ReplayShared.BuildStageReplayPath(_replayDirectory, mapName, style, track, stage, wr.Id);
+
+                var filePath = stage == 0
+                    ? ReplayShared.BuildMainReplayPath(_replayDirectory, mapName, style, track, wr.Id)
+                    : ReplayShared.BuildStageReplayPath(_replayDirectory, mapName, style, track, stage, wr.Id);
 
                 if (File.Exists(filePath)
                     && ReplayShared.LoadReplayFromPath(filePath, style, track, stage, decompressor, _logger) is { } result)
                 {
-                    lock (stageResults)
+                    lock (results)
                     {
-                        stageResults[(style, track, stage)] = result.Content;
+                        results[(style, track, stage)] = result.Content;
                     }
                 }
 
@@ -936,9 +957,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
     }
 
     private async Task LoadMissingReplaysFromRemote(
-        WRKeySet wrKeys,
-        Dictionary<(int, int), ReplayContent> mainResults,
-        Dictionary<(int, int, int), ReplayContent> stageResults,
+        List<(int style, int track, int stage, RunRecord wr)> wrKeys,
+        Dictionary<(int style, int track, int stage), ReplayContent> results,
         CancellationToken token)
     {
         if (!_replayProviderProxy.IsAvailable) return;
@@ -949,20 +969,12 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
 
         var tasks = new List<Task>();
 
-        foreach (var (style, track, _) in wrKeys.MainKeys)
+        foreach (var (style, track, stage, _) in wrKeys)
         {
             token.ThrowIfCancellationRequested();
 
-            if (mainResults.ContainsKey((style, track))) continue;
-            tasks.Add(LoadSingleRemoteReplay(semaphore, mapName, style, track, mainResults, token));
-        }
-
-        foreach (var (style, track, stage, _) in wrKeys.StageKeys)
-        {
-            token.ThrowIfCancellationRequested();
-
-            if (stageResults.ContainsKey((style, track, stage))) continue;
-            tasks.Add(LoadSingleRemoteStageReplay(semaphore, mapName, style, track, stage, stageResults, token));
+            if (results.ContainsKey((style, track, stage))) continue;
+            tasks.Add(LoadSingleRemoteReplay(semaphore, mapName, style, track, stage, results, token));
         }
 
         if (tasks.Count > 0)
@@ -973,43 +985,8 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
     }
 
     private async Task LoadSingleRemoteReplay(
-        SemaphoreSlim semaphore, string mapName, int style, int track,
-        Dictionary<(int, int), ReplayContent> results,
-        CancellationToken token)
-    {
-        await semaphore.WaitAsync(token);
-        try
-        {
-            token.ThrowIfCancellationRequested();
-
-            var bytes = await _replayProviderProxy.GetReplayAsync(mapName, style, track);
-
-            token.ThrowIfCancellationRequested();
-
-            if (bytes != null && ReplayShared.DeserializeReplay(bytes, style, track, 0, _logger) is { } result)
-            {
-                lock (results)
-                {
-                    results[(style, track)] = result.Content;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception e)
-        {
-            _logger.LogError(e, "Failed to load remote replay for style={style} track={track}", style, track);
-        }
-        finally
-        {
-            semaphore.Release();
-        }
-    }
-
-    private async Task LoadSingleRemoteStageReplay(
         SemaphoreSlim semaphore, string mapName, int style, int track, int stage,
-        Dictionary<(int, int, int), ReplayContent> results,
+        Dictionary<(int style, int track, int stage), ReplayContent> results,
         CancellationToken token)
     {
         await semaphore.WaitAsync(token);
@@ -1017,7 +994,9 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         {
             token.ThrowIfCancellationRequested();
 
-            var bytes = await _replayProviderProxy.GetStageReplayAsync(mapName, style, track, stage);
+            var bytes = stage == 0
+                ? await _replayProviderProxy.GetReplayAsync(mapName, style, track)
+                : await _replayProviderProxy.GetStageReplayAsync(mapName, style, track, stage);
 
             token.ThrowIfCancellationRequested();
 
@@ -1034,7 +1013,14 @@ internal class ReplayPlaybackModule : IReplayPlaybackModule,
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "Failed to load remote stage replay for style={style} track={track} stage={stage}", style, track, stage);
+            if (stage == 0)
+            {
+                _logger.LogError(e, "Failed to load remote replay for style={style} track={track}", style, track);
+            }
+            else
+            {
+                _logger.LogError(e, "Failed to load remote stage replay for style={style} track={track} stage={stage}", style, track, stage);
+            }
         }
         finally
         {

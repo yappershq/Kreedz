@@ -84,7 +84,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
     private readonly ListenerHub<IRecordModuleListener> _listenerHub;
 
     // Per-slot session start time (engine time when player joined this map)
-    private readonly double[] _sessionStartTime = new double[64];
+    private readonly double[] _sessionStartTime = new double[PlayerSlot.MaxPlayerCount];
 
     // Late-resolved to avoid circular DI (ReplayRecorderModule depends on IRecordModule)
     private IReplayRecorderModule _replayRecorder = null!;
@@ -191,24 +191,24 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
                 ).ConfigureAwait(false);
 
                 // Load WR checkpoints for each (style, track) combination
-                var wrCheckpointMap = new Dictionary<(int style, int track), IReadOnlyList<RunCheckpoint>>();
+                var wrPerTrack = records
+                                 .GroupBy(r => (r.Style, r.Track))
+                                 .Select(g => g.OrderBy(r => r.Time).ThenBy(r => r.Id).First());
 
-                var wrByTrack = records.GroupBy(r => (r.Style, r.Track));
-
-                foreach (var group in wrByTrack)
+                var wrCheckpointTasks = wrPerTrack.Select(async wr =>
                 {
-                    var wr = group.OrderBy(r => r.Time).ThenBy(r => r.Id).FirstOrDefault();
+                    var checkpoints = await RetryHelper.RetryAsync(() => _request.GetRecordCheckpoints(wr.Id),
+                                                                   RetryHelper.IsTransient,
+                                                                   _logger,
+                                                                   "GetRecordCheckpoints").ConfigureAwait(false);
 
-                    if (wr is not null)
-                    {
-                        var checkpoints = await RetryHelper.RetryAsync(
-                            () => _request.GetRecordCheckpoints(wr.Id),
-                            RetryHelper.IsTransient, _logger, "GetRecordCheckpoints"
-                        ).ConfigureAwait(false);
+                    return (key: (wr.Style, wr.Track), checkpoints);
+                });
 
-                        wrCheckpointMap[(wr.Style, wr.Track)] = checkpoints;
-                    }
-                }
+                var wrCheckpointResults = await Task.WhenAll(wrCheckpointTasks).ConfigureAwait(false);
+
+                var wrCheckpointMap = wrCheckpointResults
+                    .ToDictionary(r => r.key, r => r.checkpoints);
 
                 await _bridge.ModSharp.InvokeFrameActionAsync(() =>
                 {
@@ -243,18 +243,16 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
     public void OnGameShutdown()
     {
         // Flush playtime for all connected players before map change
-        for (var i = 0; i < 64; i++)
+        for (PlayerSlot i = 0; i < PlayerSlot.MaxPlayerCount; i++)
         {
             if (_sessionStartTime[i] <= 0)
             {
                 continue;
             }
 
-            var playerSlot = new PlayerSlot(i);
-
-            if (_bridge.ClientManager.GetGameClient(playerSlot) is { IsFakeClient: false } client)
+            if (_bridge.ClientManager.GetGameClient(i) is { IsFakeClient: false } client)
             {
-                FlushPlayerMapStats(playerSlot, client.SteamId);
+                FlushPlayerMapStats(i, client.SteamId);
             }
             else
             {
@@ -322,7 +320,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
         }
 
         _playerCache.Clear(slot);
-        _sessionStartTime[(int)slot] = _bridge.ModSharp.EngineTime();
+        _sessionStartTime[slot] = _bridge.ModSharp.EngineTime();
     }
 
     public void OnClientDisconnected(PlayerSlot slot)
@@ -333,7 +331,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
         }
 
         FlushPlayerMapStats(slot, client.SteamId);
-        _sessionStartTime[(int)slot] = 0; // player left, clear session
+        _sessionStartTime[slot] = 0; // player left, clear session
 
         _playerCache.Clear(slot);
     }
@@ -411,14 +409,14 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
 
     public float GetSessionTime(PlayerSlot slot)
     {
-        var start = _sessionStartTime[(int)slot];
+        var start = _sessionStartTime[slot];
+
         return start > 0 ? (float)(_bridge.ModSharp.EngineTime() - start) : 0f;
     }
 
     private void FlushPlayerMapStats(PlayerSlot slot, SteamID steamId)
     {
-        var index = (int)slot;
-        var start = _sessionStartTime[index];
+        var start = _sessionStartTime[slot];
 
         if (start <= 0)
         {
@@ -428,7 +426,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
         var delta   = (float)(_bridge.ModSharp.EngineTime() - start);
         var mapName = _bridge.GlobalVars.MapName;
 
-        _sessionStartTime[index] = _bridge.ModSharp.EngineTime(); // reset for next session segment
+        _sessionStartTime[slot] = _bridge.ModSharp.EngineTime(); // reset for next session segment
 
         if (delta <= 0f)
         {

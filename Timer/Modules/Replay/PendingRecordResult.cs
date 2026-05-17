@@ -21,7 +21,7 @@ namespace Source2Surf.Timer.Modules.Replay;
 
 /// <summary>
 /// Stores a record result when OnRecordSaved arrives before the post-frame timer expires.
-/// Consumed by CreateAndStorePendingReplay to bypass PendingReplayStore.
+/// Consumed by StorePendingReplay to bypass PendingReplayStore.
 /// </summary>
 internal sealed class PendingRecordResult
 {

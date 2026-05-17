@@ -26,7 +26,8 @@ namespace Source2Surf.Timer.Modules.Replay;
 
 internal class ReplayBotData : IReplayBotData
 {
-    public required ReplayBotConfig Config { get; init; }
+    public required ReplayBotConfig Config      { get; init; }
+    public required int             ConfigIndex { get; init; }
 
     public          EntityIndex       Index      { get; init; }
     public required IPlayerController Controller { get; init; }

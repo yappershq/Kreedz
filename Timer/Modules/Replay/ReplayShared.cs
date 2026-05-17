@@ -244,12 +244,13 @@ internal static class ReplayShared
     {
         var framesBuffer = frame.Frames;
 
-        // Inherit the old buffer's Capacity to avoid repeated exponential resizing on long maps.
-        // ReplayFrameBuffer doubles via EnsureCapacity when full (same as List<T>).
-        // Initial capacity (Tickrate*60*5 ≈ 38400 at 128tick) only covers ~5 min;
-        // long maps (20+ min) would re-climb the same doubling chain without this.
-        var inheritedCapacity = Math.Max(framesBuffer.Capacity, TimerConstants.Tickrate * 60 * 5);
-        frame.Frames = new ReplayFrameBuffer(inheritedCapacity);
+        // Size the next buffer to ~2x the last run's frame count (or baseline, whichever is larger).
+        // Steady-length players skip the doubling chain; players whose run length collapses
+        // (one long warm-up, then short attempts) get memory back instead of holding a
+        // worst-case buffer forever.
+        var baseline    = TimerConstants.Tickrate * 60 * 5;
+        var newCapacity = Math.Max(baseline, framesBuffer.Count * 2);
+        frame.Frames    = new List<ReplayFrameData>(newCapacity);
 
         var header = new ReplayFileHeader
         {
@@ -318,7 +319,7 @@ internal static class ReplayShared
 
         if (excess > 0)
         {
-            frameData.Frames.RemoveOldest(excess);
+            frameData.Frames.RemoveRange(0, excess);
         }
     }
 

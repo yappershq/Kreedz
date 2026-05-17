@@ -18,6 +18,7 @@
 using System;
 using System.Collections.Generic;
 using Sharp.Shared.Units;
+using Source2Surf.Timer.Shared.Models.Replay;
 
 namespace Source2Surf.Timer.Modules.Replay;
 
@@ -37,7 +38,7 @@ internal class PlayerFrameData
 
     public bool GrabbingPostFrame { get; set; } = false;
 
-    public ReplayFrameBuffer Frames { get; set; } = [];
+    public List<ReplayFrameData> Frames { get; set; } = [];
 
     public int AttemptId { get; set; }
 

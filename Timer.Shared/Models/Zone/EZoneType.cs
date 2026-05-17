@@ -19,10 +19,11 @@ namespace Source2Surf.Timer.Shared.Models.Zone;
 
 public enum EZoneType : sbyte
 {
-    Invalid    = -1,
-    Start      = 0,
-    End        = 1,
-    Stage      = 2,
-    Checkpoint = 3,
-    StopTimer  = 4,
+    Invalid = -1,
+    Start,
+    End,
+    Stage,
+    Checkpoint,
+    StopTimer,
+    Max,
 }
