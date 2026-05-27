@@ -15,7 +15,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-using System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
@@ -42,6 +41,8 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
     private readonly ICommandManager     _commandManager;
     private readonly IPatchManager       _patchManager;
     private readonly IReplayModule       _replayModule;
+    private readonly IStyleModule        _styleModule;
+    private readonly ITimerModule        _timerModule;
     private readonly ILogger<MiscModule> _logger;
 
     // ReSharper disable InconsistentNaming
@@ -60,6 +61,7 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
     private readonly IConVar timer_god_mode;
     private readonly IConVar timer_remove_dropped_weapons;
     private readonly IConVar timer_remove_weapons_on_spawn;
+    private readonly IConVar timer_desubtick_jump;
 
     // ReSharper restore InconsistentNaming
 
@@ -68,19 +70,28 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
                       IInlineHookManager  inlineHookManager,
                       IPatchManager       patchManager,
                       IReplayModule       replayModule,
+                      IStyleModule        styleModule,
+                      ITimerModule        timerModule,
                       ILogger<MiscModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
         _patchManager   = patchManager;
         _replayModule   = replayModule;
+        _styleModule    = styleModule;
+        _timerModule    = timerModule;
         _logger         = logger;
 
         CBaseEntity_m_vecVelocity_offset = bridge.SchemaManager.GetNetVarOffset("CBaseEntity", "m_vecVelocity");
 
-        timer_god_mode                = bridge.ConVarManager.CreateConVar("timer_god_mode",                1)!;
-        timer_remove_dropped_weapons  = bridge.ConVarManager.CreateConVar("timer_remove_dropped_weapons",  true)!;
+        timer_god_mode                = bridge.ConVarManager.CreateConVar("timer_god_mode", 1)!;
+        timer_remove_dropped_weapons  = bridge.ConVarManager.CreateConVar("timer_remove_dropped_weapons", true)!;
         timer_remove_weapons_on_spawn = bridge.ConVarManager.CreateConVar("timer_remove_weapons_on_spawn", true)!;
+
+        timer_desubtick_jump = bridge.ConVarManager.CreateConVar("timer_desubtick_jump",
+                                                                 true,
+                                                                 "Enable this convar to prevent players from gaining extra speed by abusing subtick with spamming jump")
+            !;
 
         FindOrCreateQuantizedFloatEncoder
             = (delegate* unmanaged<QuantizedEncoderReg_t*, bool, byte*, int, int, float, float, void>)
@@ -88,7 +99,7 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
 
         if (FindOrCreateQuantizedFloatEncoder == null)
         {
-            throw new NullReferenceException("Failed to find FindOrCreateQuantizedFloatEncoder from tier0");
+            _logger.LogWarning("Failed to find FindOrCreateQuantizedFloatEncoder from tier0");
         }
     }
 
@@ -102,6 +113,8 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
         _bridge.HookManager.TerminateRound.InstallHookPre(OnTerminateRoundPre);
         _bridge.HookManager.PlayerDispatchTraceAttack.InstallHookPre(OnPlayerDispatchAttackPre);
         _bridge.HookManager.PlayerDropWeapon.InstallForward(OnPlayerDropWeapon);
+
+        _bridge.HookManager.PlayerRunCommand.InstallHookPre(OnPlayerRunCommand);
 
         return true;
     }
@@ -118,11 +131,12 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
         _bridge.HookManager.TerminateRound.RemoveHookPre(OnTerminateRoundPre);
         _bridge.HookManager.PlayerDispatchTraceAttack.RemoveHookPre(OnPlayerDispatchAttackPre);
         _bridge.HookManager.PlayerDropWeapon.RemoveForward(OnPlayerDropWeapon);
+        _bridge.HookManager.PlayerRunCommand.RemoveHookPre(OnPlayerRunCommand);
     }
 
     public void OnGameActivate()
     {
-        CreateUnclampedDecoder();
+        // CreateUnclampedDecoder();
     }
 
     public void OnServerActivate()
@@ -136,7 +150,7 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
     {
         var pawn = @params.Pawn;
 
-        ApplyUnclampedEncoder(pawn);
+        // ApplyUnclampedEncoder(pawn);
 
         if (timer_remove_weapons_on_spawn.GetBool())
         {
@@ -174,6 +188,38 @@ internal unsafe partial class MiscModule : IModule, IMiscModule, IGameListener
         {
             @params.Weapon.Kill();
         }
+    }
+
+    private HookReturnValue<EmptyHookReturn> OnPlayerRunCommand(IPlayerRunCommandHookParams      @params,
+                                                                HookReturnValue<EmptyHookReturn> ret)
+    {
+        if (!timer_desubtick_jump.GetBool())
+            return new ();
+
+        var client = @params.Client;
+        var slot   = client.Slot;
+
+        if (_timerModule.GetTimerInfo(slot) is not { } timerInfo
+            || _styleModule.GetStyleSetting(timerInfo.Style) is
+            {
+                AutoBhop: false, // we don't remove jump button from subtick moves if autobhop is off, because that will make scroll-jumping stop working
+            })
+            return new ();
+
+        var subtickMoveSize = @params.SubtickMoveSize;
+
+        for (var i = 0; i < subtickMoveSize; i++)
+        {
+            var subtickMove = @params.GetSubtickMove(i);
+
+            if (subtickMove == null)
+                continue;
+
+            if ((subtickMove->Buttons & UserCommandButtons.Jump) != 0)
+                subtickMove->Buttons &= ~UserCommandButtons.Jump;
+        }
+
+        return new HookReturnValue<EmptyHookReturn>();
     }
 
 #endregion
