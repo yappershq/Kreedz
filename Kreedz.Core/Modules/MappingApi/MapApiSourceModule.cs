@@ -59,9 +59,14 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
 
     public bool Init()
     {
+        // The CreateWorldInternal sig may already be registered by another module (StripperSharp hooks the
+        // same function) — that's fine, it resolves from the global gamedata table either way. Tolerate the
+        // "already exists" collision here so it doesn't abort the hook install below.
+        try { _bridge.ModSharp.GetGameData().Register("kreedz-mapapi.games"); }
+        catch (Exception e) { _logger.LogInformation("[KZ.MapApi] CreateWorldInternal gamedata already present ({m}) — reusing it.", e.Message); }
+
         try
         {
-            _bridge.ModSharp.GetGameData().Register("kreedz-mapapi.games");
             CEntityKeyValues.Init(_bridge.ModSharp);
             CKeyValues3.Init(_bridge.ModSharp);
 
@@ -82,7 +87,7 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "[KZ.MapApi] mapping-API source unavailable (sig/native failure) — modern kz_ maps won't register zones.");
+            _logger.LogError(e, "[KZ.MapApi] mapping-API source unavailable (native failure) — modern kz_ maps won't register zones.");
         }
 
         return true;
