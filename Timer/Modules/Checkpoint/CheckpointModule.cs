@@ -23,8 +23,11 @@ internal interface ICheckpointModule
     /// <summary>Teleports used this run (≥1 → the run is Standard, not Pro).</summary>
     int GetTeleportCount(PlayerSlot slot);
 
-    /// <summary>Clear a player's checkpoints + teleport counter (call at run start / respawn).</summary>
+    /// <summary>Clear a player's checkpoints + teleport counter (call on respawn / map change).</summary>
     void ResetCheckpoints(PlayerSlot slot);
+
+    /// <summary>Reset only the teleport counter, keeping the checkpoint stack (a fresh run starts Pro).</summary>
+    void ResetTeleportCount(PlayerSlot slot);
 }
 
 internal sealed class CheckpointModule : IModule, ICheckpointModule
@@ -83,6 +86,8 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
         _cpIndex[slot] = 0;
         _tpCount[slot] = 0;
     }
+
+    public void ResetTeleportCount(PlayerSlot slot) => _tpCount[slot] = 0;
 
     // ── cp / tp ────────────────────────────────────────────────────────────
 

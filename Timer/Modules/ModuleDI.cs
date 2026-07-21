@@ -62,5 +62,8 @@ internal static class ModuleDI
 
         // KZ port: jumpstats foundation — LJ/BH detection + distance tiers (cs2kz src/kz/jumpstats).
         services.ImplSingleton<IJumpstatsModule, IModule, JumpstatsModule>();
+
+        // KZ port: KZ run semantics (Pro/Standard from teleport count) on the timer (cs2kz src/kz/timer).
+        services.ImplSingleton<IKzTimerModule, IModule, KzTimerModule>();
     }
 }
