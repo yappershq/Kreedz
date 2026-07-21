@@ -1,45 +1,66 @@
-# KZ Port — Status
+# Kreedz — Honest Port Status vs cs2kz-metamod
 
-A reimplementation of [KZGlobalteam/cs2kz-metamod](https://github.com/KZGlobalteam/cs2kz-metamod) built
-on a fork of [Source2Surf/Timer](https://github.com/Source2Surf/Timer). The **core loop is built and
-green** (timer, checkpoints, modes, styles, DB, ranks, bans); it is **not yet 1:1** — cs2kz has 31
-subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN.md` for architecture and
-`EXTENSIBILITY.md` for the mode/style plugin split.
+A reimplementation of [KZGlobalteam/cs2kz-metamod](https://github.com/KZGlobalteam/cs2kz-metamod) built on a
+fork of [Source2Surf/Timer](https://github.com/Source2Surf/Timer). **This file is the source of truth and is
+deliberately conservative.** It was rewritten 2026-07-21 after a skeptical, source-verified subsystem audit
+(both codebases read line-by-line) that found the previous "✅ / 1:1 / 100% ported" labels were based on code
+being *present*, not on it *running* or *matching cs2kz*. Kreedz is a working **movement-feel + DB/ranks
+skeleton**; it is **not** a complete cs2kz port. Verdicts below: COMPLETE / PARTIAL / MISSING.
 
-## Subsystems
+## ⚠️ The one that matters most
 
-| System | State | Notes |
+**Modern `kz_` maps register no zones today → no timer → not actually playable KZ on real maps.** The Mapping
+API parser (`Modules/MappingApi/MappingApi.cs`) is a faithful transcription of cs2kz's, but it is **wired to
+nothing** (not in DI, no `IMappingKeyValueSource` impl, never called). The live zone engine
+(`Modules/ZoneModule.cs`) is Source2Surf's **surf** targetname-matcher + native `HookEntityOutput`, not
+cs2kz's keyvalue-driven, TriggerFix (anti-dodge) trigger system. So a modern kz_ map (which describes zones
+via `timer_trigger_type` entity keyvalues) is invisible. This is the #1 blocker to being real KZ.
+
+## Verdict matrix
+
+| Subsystem | Verdict | Reality |
 |---|---|---|
-| Timer | 🟡 | PRO/STANDARD + start-validation gate (alive + Walk movetype). Missing: named courses (mapping-API), split zones, debounce guards, global submission/announce flow. |
-| Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`. Startpos not DB-persisted. |
-| Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. **Full 33/33 convar layer** now; registry still has no movement-callback API (3rd-party modes can't add custom physics hooks yet). |
-| Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
-| Native movement detours | 🟡 | Full AirAccelerate→FinishMove surface hooked (18 sig detours + FinishMove vtable hook). **All CKZ-override physics FILLED:** prestrafe, perf, rampbug (CategorizePosition), AirMove cap, **TryPlayerMove slopefix** (bump loop + 3×3×3 pierce search + ClipVelocity, applied only on rampbug detection). Non-overridden funcs correctly pass-through. Two flags: `kz_ckz_native_hooks` (default on — safe fills), `kz_ckz_tpm` (default **off** — the collision reimpl, enable after demo validation). Remaining: tick-for-tick demo validation on a live server. |
-| Jumpstats | ✅ | External `Kreedz.Jumpstats`. Full stat set (strafes/sync/gain/maxspeed/height) + full jump-type classification + **DB persistence** (`kz_jumpstats`). Native duckbug precision + edge-distance are refinements. |
-| HUD | 🟡 | External `Kreedz.Hud` plugin (reads `IKzRunService`+`IKzModeRegistry`). Run timer + paused + CP/TP + speed/keys/mode. Missing PB delta (needs cached PB), spectator/replay HUD. |
-| DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
-| Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
-| Global API | 🟡 | External `Kreedz.Global` plugin (submit-only: hello + NewRecord via `IKzRunService.RunFinished`). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. Live-gated (needs a real key). |
-| Anticheat | ✅ | External `Kreedz.Anticheat`. **All 6 cs2kz detector files ported** (7 detectors) + **infractions DB** (`kz_infractions`). "hyperscroll" isn't a cs2kz detector. Fully done. |
-| Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted. |
-| Preferences | ✅ | Mode/FOV/styles persist across reconnect (subset of cs2kz option keys). |
-| Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`, `noclip`. |
-| Localization | ✅ | i18n infra + **all 10 modules' interactive messages** localized (40 keys). Only tip rotating-content strings remain inline (minor). en-US shipped; other cultures fall back. |
+| Movement (CKZ physics) | 🟡 PARTIAL | 3 of cs2kz's ~26 detours (AirMove/CategorizePosition/TryPlayerMove), now Core-owned + dispatched to a mode via `IKzMovementMode`. Prestrafe/perf/air-cap/basic rampbug real. **Prestrafe turn-rate metric is wrong** (raw mouse-yaw Δ vs cs2kz's wishdir-vs-velocity angle — verified kz_mode_ckz.cpp:455-476). SlopeFix (OnStartTouchGround) missing + was mislabeled. Water-speed cap missing. TryPlayerMove slopefix ships **off** (`kz_ckz_tpm=0`) + missing commit-gate & backward stuck-trace. |
+| Modes | 🟡 PARTIAL | Registry + both 33-cvar tables faithful. **VNL is NOT stock in cs2kz** (verified kz_mode_vnl.h:69-83 — ~13 overrides: triggerfix, CanTouchTimerZone, OnTeleport, OnStartTouchGround…); our VNL registers none. Mode-switch safety (stop timer/zero vel/invalidate) missing. Per-mode jumpstat tiers not wired. |
+| Styles | 🟡 PARTIAL | ABH/LGJ faithful. **AutoUnduck missing** (1 of cs2kz's only 3 real styles). Ice/LowGrav/WSOnly/ADOnly are *invented* (cs2kz never built them). No style-incompatibility check (ADOnly+WSOnly would freeze WASD). No timer-stop on style change. |
+| Timer | 🟡 PARTIAL | Source2Surf surf-timer engine + a thin PRO/STANDARD label. Start-gate is `alive && Walk` only — cs2kz's teleport/land/noclip/perf debounce + safeguard-pro enforcement missing. Pause doesn't truly freeze. No global submission state machine. |
+| Checkpoints | 🟡 PARTIAL | cp/tp list-cycle + PRO coupling faithful. `undo` is a *different* feature (deletes last cp vs cs2kz reverting the last teleport). Startpos not DB-persisted (cs2kz's is). Trigger-modifier guards missing. |
+| Zones / Triggers | 🔴 MISSING | Surf targetname matcher + native output hooks, not cs2kz's TriggerFix trace re-detection. No modifier/antibhop/teleport/push/bhop-counter trigger types. No Split zone. |
+| Mapping API | 🔴 MISSING | Faithful parser exists but is **dead code** — never invoked. Root cause of the zone/course gaps. |
+| Courses | 🟡 PARTIAL | Multi-course exists as anonymous int tracks (0=main,1-31=bonus), not named `KZCourseDescriptor`. No Mode dimension in the record key, no course-switch-on-start-zone-touch. |
+| Global API | 🔴 MISSING | Submit-only shell: `hello` + one-way `NewRecord`, ack-blind (parses only `hello_ack`). No PB/WR/top/map/course queries, no ban sync, no replay transfer, no `filter_id`/course concept. Would likely not validate against a real backend. Needs an issued key regardless. |
+| Racing / 1v1 | 🔴 MISSING | 0% built. cs2kz's is a WebSocket cross-server coordinator (gated on their backend). |
+| Jumpstats | 🟡 PARTIAL | Distance/strafes/sync/gain/maxspeed/height + DB persistence + jump-type classify (Jumpbug type missing). **Tier table is a single LongJump row applied to every jump type & both modes — provably wrong** for Bhop/MBH/etc. 10+ cs2kz stat fields missing (offset/edge/width/overlap/deadair/block/…). |
+| Anticheat | 🟡 PARTIAL | All 6 cs2kz detectors wired (strafe_optimizer is 1:1; others thinned). **No enforcement/escalation** — `Flag()` logs + optional kick, never converts to a ban; cs2kz's Infraction→Finalize (durations, replay evidence, dedupe) has no equivalent. |
+| Replays | 🟡 PARTIAL | Record + bot-driven playback are real. Frame format is a subset (no duck/jump/subtick/weapon). "Global" storage is a self-hosted blob store, **not interoperable** with cs2kz.org. |
+| Options / Preferences | 🟡 PARTIAL | Untyped `Dictionary<string,string>`, only 3 of cs2kz's 65 keys wired (mode/fov/styles). No typed store, no local/global merge, no server-config option layer. Several "ported" utils silently lose state on reconnect because of this. |
+| Language / i18n | 🔴 MISSING | 44 keys, `en-US` only, no switching command/pref. cs2kz has 713 phrases × 13 languages. ~6% of phrase volume; the switching mechanism doesn't exist. |
+| HUD | 🟡 PARTIAL | One fixed HTML block, no perf-color tint, `mm:ss.mmm` not `h:mm:ss`, no commands, no compact mode, no particle MHUD. |
+| Tip | 🟡 PARTIAL | Broadcast cycling works. No configurable interval, no file-scan/shuffle loading, no join side-effects. |
+| Ban | 🟡 PARTIAL | Manual `!ban`/`!unban` with ACL works (cs2kz core doesn't even expose that as a command). But no automated AC→ban pipeline; `RemoveBans` hard-deletes vs soft-expire. |
+| Goto / Fov / Measure / Pistol / Noclip | 🟡 PARTIAL | Degraded reimplementations: Goto (no timer-block/ladder/collision-reset, wrong arrival angle), Fov (no per-tick reassertion), Measure (measures own position vs cs2kz's aim-trace; 3/4 cmds missing), Pistol (additive-give vs strip-enforce, no team-awareness, no persist), Noclip (no death-auto-disable/safeguard gate — anti-exploit hole, embedded in TimerModule). |
+| Quiet/hide · Beam · Paint · Ztopwatch · Spec-by-name · Rank-titles | 🔴 MISSING | Entirely unbuilt — no files, commands, or locale keys. |
+| Saveloc/loadloc | ⚪ N/A | cs2kz's own is an empty stub — not a Kreedz gap. |
+| Database | 🟡 PARTIAL | SqlSugar dual-backend + LiteDB fallback works (live). No CRC-versioned migration ledger (cs2kz has one). Drops Modes/Styles registry tables. |
+| Commands | 🟡 PARTIAL | Dict dispatch with **real ACL** (better than cs2kz's flat scan) but no cooldowns; ~87 vs cs2kz's ~132 names, the shortfall tracking the missing subsystems above. |
 
-## Not started (missing subsystems vs cs2kz)
+## Proposed priority order to reach real 1:1
 
-- **Mapping API + KZ trigger system** — the biggest gap. Model + parser now built (`Modules/MappingApi/`,
-  verbatim from cs2kz, verified) but **not yet wired to a live keyvalue source**: ModSharp exposes no
-  managed spawn-keyvalue read, so the source (native `CEntityKeyValues` detour vs. offline entity-lump
-  extract) is a pending decision. Until wired, modern keyvalue-driven kz_ maps still register no zones.
-- **Localization** — all output is hardcoded English; cs2kz has a ~30-language phrase system.
-- **saveloc/loadloc**, **quiet (!hide/!hidelegs)**, **beam trails**, **paint**, **ztopwatch** (2-zone practice
-  stopwatch), **profile** (rank titles/clan tag), **spec-by-name/speclist**, **racing/1v1**, **telemetry**.
+1. **Mapping API wiring + cs2kz zone/trigger engine** — unblocks real kz_ maps (zones→timer). Needs a live entity-keyvalue source (native `CEntityKeyValues` read on spawn) + porting the 14 trigger types + TriggerFix.
+2. **Prestrafe metric fix** (wishdir-vs-velocity) — headline CKZ mechanic, small change.
+3. **VNL real movement + both-modes CanTouchTimerZone / triggerfix** — core fidelity.
+4. **Timer start-gate / pause / safeguard-pro** — real KZ timer semantics.
+5. **Jumpstats per-mode/per-type tier tables + missing stats + Jumpbug**.
+6. **AC → ban enforcement pipeline** (Infraction→Finalize).
+7. **Global-API full client** (queries + ack handling) — validate against an issued key.
+8. **Missing utilities**: quiet/hide, beam, paint, spec-by-name, rank-titles, ztopwatch.
+9. **Real i18n** (phrase system + per-player language).
+10. **Mode/style safety guards, checkpoint startpos persistence, degraded-util polish, DB migration ledger.**
+11. **Racing** (last — gated on KZGlobalteam's coordinator backend).
 
-## Live-gated (need a live CS2 server or an issued key — not doable headless)
+## What genuinely works right now (live-verified on f1b935e4)
 
-1. **CKZ native physics fill** — detours are pass-through; rampbug/slopefix, exact air-accel/ladder physics
-   need tick-for-tick validation vs demos on a real server.
-2. **Official global submission** — needs a real key from KZGlobalteam (their backend checksum-validates the
-   plugin). Client is built; local ranking runs regardless.
-3. **Anticheat tuning** — the telemetry detectors need real movement data to calibrate.
+All modules load clean; SQL DB connected; VNL + 6 styles + jumpstats + anticheat + HUD register; CKZ managed
+physics (prestrafe/perf/air-cap) + the 3 Core-owned native detours install and dispatch; `!` command layer,
+ranks, manual ban, checkpoints, mode/fov/style prefs. Movement *feel* on legacy-named maps works; modern
+mapping-API maps do not (see the ⚠️ above).
