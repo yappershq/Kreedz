@@ -15,12 +15,12 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 | Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. **Full 33/33 convar layer** now; registry still has no movement-callback API (3rd-party modes can't add custom physics hooks yet). |
 | Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
 | Native movement detours | 🟡 | Full AirAccelerate→FinishMove surface hooked (18 sig detours + FinishMove vtable hook). **All CKZ-override physics FILLED:** prestrafe, perf, rampbug (CategorizePosition), AirMove cap, **TryPlayerMove slopefix** (bump loop + 3×3×3 pierce search + ClipVelocity, applied only on rampbug detection). Non-overridden funcs correctly pass-through. Two flags: `kz_ckz_native_hooks` (default on — safe fills), `kz_ckz_tpm` (default **off** — the collision reimpl, enable after demo validation). Remaining: tick-for-tick demo validation on a live server. |
-| Jumpstats | 🟡 | External `Kreedz.Jumpstats` plugin. **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
+| Jumpstats | 🟡 | External `Kreedz.Jumpstats`. LJ/BH + distance tiers + **core stat set** (strafes/sync/gain/maxspeed/height, per-tick). Missing: full jump-type classification (MultiBhop/WeirdJump/…), edge distance, invalidation, jumpstats DB. |
 | HUD | 🟡 | External `Kreedz.Hud` plugin (reads `IKzRunService`+`IKzModeRegistry`). Run timer + paused + CP/TP + speed/keys/mode. Missing PB delta (needs cached PB), spectator/replay HUD. |
 | DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
 | Global API | 🟡 | External `Kreedz.Global` plugin (submit-only: hello + NewRecord via `IKzRunService.RunFinished`). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. Live-gated (needs a real key). |
-| Anticheat | 🟡 | External `Kreedz.Anticheat` plugin. 2 of cs2kz's 6 detectors (invalid-cvar + bhop-chain). No telemetry detectors, no infractions DB. |
+| Anticheat | 🟡 | External `Kreedz.Anticheat`. **3 detectors:** invalid-cvar, bhop-chain, **nulls** (counter-strafe telemetry). Missing: strafe-optimizer/subtick/hyperscroll (need subtick timing), infractions DB. |
 | Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted. |
 | Preferences | ✅ | Mode/FOV/styles persist across reconnect (subset of cs2kz option keys). |
 | Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`, `noclip`. |
