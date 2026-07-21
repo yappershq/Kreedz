@@ -64,6 +64,34 @@ public sealed class KreedzAnticheat : IModSharpModule
     private readonly int[] _subtickWindow = new int[PlayerSlot.MaxPlayerCount];
     private readonly int[] _subtickTicks  = new int[PlayerSlot.MaxPlayerCount];
 
+    // Autostrafe detector (cs2kz jumps.cpp) — a script strafes far more per second than a human. Per jump
+    // (airtime >= 0.6s, sync > 0.7): if strafes/sec exceeds thresholds it's suspicious; too many suspicious
+    // jumps in a rolling window of 20 flags a strafe-hack.
+    private const float AsMinAirtime  = 0.6f;
+    private const float AsMinSync     = 0.7f;
+    private const float AsBaseSps     = 18.0f;  // REAL_STRAFE_PER_SECOND_THRESHOLD
+    private const float AsMaxSps      = 30.0f;  // MAX_STRAFES_PER_SECOND_THRESHOLD
+    private const int   AsWindow      = 20;
+    private const int   AsBaseSusp    = 15;
+    private const int   AsMinSusp     = 5;
+    private readonly bool[]  _jumpTracking = new bool[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _jumpAir      = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _jumpGain     = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _jumpStrafes  = new int[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _jumpLastSpd  = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _jumpLastYaw  = new float[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _jumpYawDir   = new int[PlayerSlot.MaxPlayerCount];
+    private readonly bool[][] _susWindow   = NewJaggedBool(AsWindow); // rolling suspicious flags
+    private readonly bool[][] _veryHighWin = NewJaggedBool(AsWindow);
+    private readonly int[]   _susIdx       = new int[PlayerSlot.MaxPlayerCount];
+
+    private static bool[][] NewJaggedBool(int depth)
+    {
+        var a = new bool[PlayerSlot.MaxPlayerCount][];
+        for (var i = 0; i < a.Length; i++) a[i] = new bool[depth];
+        return a;
+    }
+
     // Strafe-optimizer detector (cs2kz strafe_optimizer.cpp): a scripted optimizer snaps the yaw at the
     // exact optimal strafe-reversal, producing a yaw-accel spike a human mouse can't. Rolling average of
     // spike occurrences; flag past 0.9. Needs 6 angle frames to compute accel at the 3 sample points.
@@ -170,10 +198,65 @@ public sealed class KreedzAnticheat : IModSharpModule
             }
         }
 
+        DetectAutostrafe(client, slot, arg.Pawn, onGround);
+
         _wasGround[slot] = onGround;
 
         DetectSnaptap(client, slot, arg);
         DetectStrafeOptimizer(client, slot, arg.Pawn.GetEyeAngles().Y, _modSharp.GetGlobals().FrameTime);
+    }
+
+    // cs2kz jumps.cpp autostrafe detector — per-jump strafes/sec over a rolling window of jumps.
+    private void DetectAutostrafe(IGameClient client, PlayerSlot slot, Sharp.Shared.GameEntities.IPlayerPawn pawn, bool onGround)
+    {
+        var vel   = pawn.GetAbsVelocity();
+        var horiz = MathF.Sqrt(vel.X * vel.X + vel.Y * vel.Y);
+        var yaw   = pawn.GetEyeAngles().Y;
+
+        if (_wasGround[slot] && !onGround) // takeoff
+        {
+            _jumpTracking[slot] = pawn.ActualMoveType is MoveType.Walk;
+            _jumpAir[slot] = _jumpGain[slot] = _jumpStrafes[slot] = 0;
+            _jumpLastSpd[slot] = horiz; _jumpLastYaw[slot] = yaw; _jumpYawDir[slot] = 0;
+        }
+        else if (!onGround && _jumpTracking[slot]) // airborne
+        {
+            _jumpAir[slot]++;
+            if (horiz > _jumpLastSpd[slot] + 0.01f) _jumpGain[slot]++;
+            var dy  = NormalizeYaw(yaw - _jumpLastYaw[slot]);
+            var dir = dy > 0.05f ? 1 : dy < -0.05f ? -1 : 0;
+            if (dir != 0 && _jumpYawDir[slot] != 0 && dir != _jumpYawDir[slot]) _jumpStrafes[slot]++;
+            if (dir != 0) _jumpYawDir[slot] = dir;
+            _jumpLastSpd[slot] = horiz; _jumpLastYaw[slot] = yaw;
+        }
+        else if (!_wasGround[slot] && onGround && _jumpTracking[slot]) // landing
+        {
+            _jumpTracking[slot] = false;
+            var airtime = _jumpAir[slot] * TickTime;
+            var sync    = _jumpAir[slot] > 0 ? (float) _jumpGain[slot] / _jumpAir[slot] : 0f;
+
+            var suspicious = false; var veryHigh = false;
+            if (airtime >= AsMinAirtime && sync > AsMinSync)
+            {
+                var sps = _jumpStrafes[slot] / airtime;
+                if (sps > AsMaxSps)      { suspicious = true; veryHigh = true; }
+                else if (sps > AsBaseSps) suspicious = true;
+            }
+
+            var i = _susIdx[slot];
+            _susWindow[slot][i]   = suspicious;
+            _veryHighWin[slot][i] = veryHigh;
+            _susIdx[slot] = (i + 1) % AsWindow;
+
+            int susCount = 0, vhCount = 0;
+            for (var k = 0; k < AsWindow; k++) { if (_susWindow[slot][k]) susCount++; if (_veryHighWin[slot][k]) vhCount++; }
+
+            if (susCount >= AsBaseSusp || (susCount >= AsMinSusp && vhCount > 0))
+            {
+                Flag(client, $"autostrafe ({susCount}/{AsWindow} high-strafe jumps)");
+                for (var k = 0; k < AsWindow; k++) { _susWindow[slot][k] = false; _veryHighWin[slot][k] = false; }
+            }
+        }
     }
 
     // cs2kz KZAnticheatService::DetectOptimization — flags a scripted strafe optimizer by its yaw-accel
