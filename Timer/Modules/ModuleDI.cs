@@ -65,5 +65,8 @@ internal static class ModuleDI
 
         // KZ port: KZ run semantics (Pro/Standard from teleport count) on the timer (cs2kz src/kz/timer).
         services.ImplSingleton<IKzTimerModule, IModule, KzTimerModule>();
+
+        // KZ port: anticheat — invalid client-cvar detector (cs2kz src/kz/anticheat).
+        services.ImplSingleton<IAnticheatModule, IModule, AnticheatModule>();
     }
 }
