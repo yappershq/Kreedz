@@ -28,6 +28,16 @@ internal sealed partial class StorageServiceImpl
                     .Where(b => b.SteamId == steamId)
                     .ExecuteCommandAsync();
 
+    public async Task SaveInfractionAsync(SteamID steamId, string type, string? details)
+        => await _db.Insertable(new InfractionEntity
+                    {
+                        Id        = Guid.NewGuid().ToString(),
+                        SteamId   = steamId,
+                        Type      = type,
+                        Details   = details,
+                        CreatedAt = DateTime.UtcNow,
+                    }).ExecuteCommandAsync();
+
     public async Task<BanRecord?> GetActiveBanAsync(SteamID steamId)
     {
         var now = DateTime.UtcNow;

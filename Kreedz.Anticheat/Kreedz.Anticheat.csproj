@@ -11,6 +11,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\Kreedz.Shared\Kreedz.Shared.csproj" Private="false" ExcludeAssets="runtime" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="ModSharp.Sharp.Shared" Version="*" />
         <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" PrivateAssets="all" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" PrivateAssets="all" />

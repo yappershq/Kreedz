@@ -186,6 +186,18 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
         return Task.FromResult<BanRecord?>(ban);
     }
 
+    public Task SaveInfractionAsync(SteamID steamId, string type, string? details)
+    {
+        Database.GetCollection<BsonDocument>("kz_infractions").Insert(new BsonDocument
+        {
+            ["steamid"] = (long) steamId.AsPrimitive(),
+            ["type"]    = type,
+            ["details"] = details,
+            ["created"] = DateTime.UtcNow,
+        });
+        return Task.CompletedTask;
+    }
+
     /// <summary>SteamIDs with an active (unexpired) ban — excluded from the public leaderboard reads.</summary>
     private HashSet<ulong> ActiveBanSet()
     {

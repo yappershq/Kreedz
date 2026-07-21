@@ -244,6 +244,9 @@ internal sealed class RequestManagerProxy : IManager, IRequestManager
     public Task<BanRecord?> GetActiveBanAsync(SteamID steamId)
         => Current.GetActiveBanAsync(steamId);
 
+    public Task SaveInfractionAsync(SteamID steamId, string type, string? details)
+        => Current.SaveInfractionAsync(steamId, type, details);
+
     #endregion
 
     #region Preferences

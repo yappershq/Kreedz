@@ -26,6 +26,7 @@ using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
+using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Anticheat;
 
@@ -35,10 +36,13 @@ public sealed class KreedzAnticheat : IModSharpModule
     private const float PerfWindow    = 0.02f; // cs2kz BH_PERF_WINDOW
     private const float TickTime      = 1f / 64f;
 
+    private readonly ISharedSystem           _shared;
     private readonly IModSharp               _modSharp;
     private readonly IHookManager            _hookManager;
     private readonly IClientManager          _clientManager;
     private readonly ILogger<KreedzAnticheat> _logger;
+
+    private IRequestManager? _request; // resolved cross-plugin for infraction persistence
     private readonly IConVar                 _autokick;
     private readonly IConVar?                _svCheats;
 
@@ -112,6 +116,7 @@ public sealed class KreedzAnticheat : IModSharpModule
 
     public KreedzAnticheat(ISharedSystem shared, string? dllPath, string? sharpPath, Version? version, IConfiguration? coreConfiguration, bool hotReload)
     {
+        _shared        = shared;
         _modSharp      = shared.GetModSharp();
         _hookManager   = shared.GetHookManager();
         _clientManager = shared.GetClientManager();
@@ -130,6 +135,10 @@ public sealed class KreedzAnticheat : IModSharpModule
         _hookManager.PlayerRunCommand.InstallHookPost(OnRunCommandPost);
         return true;
     }
+
+    public void OnAllModulesLoaded()
+        => _request = _shared.GetSharpModuleManager()
+                            .GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
 
     // Nulls detector — inspect per-tick strafe buttons for inhumanly-clean counter-strafes.
     private void OnRunCommandPost(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
@@ -375,10 +384,28 @@ public sealed class KreedzAnticheat : IModSharpModule
     private void Flag(IGameClient client, string reason)
     {
         _logger.LogWarning("[KZ.AC] {Name} ({Sid}) flagged: {Reason}", client.Name, client.SteamId, reason);
+
+        // Persist the infraction for review (cs2kz infractions.cpp) — fire-and-forget, degrades to no-op
+        // if the request manager isn't available. Split the "<type> (<details>)" reason for the columns.
+        if (_request is { } req)
+        {
+            var sid = client.SteamId;
+            var paren = reason.IndexOf('(');
+            var type = (paren > 0 ? reason[..paren] : reason).Trim();
+            var details = paren > 0 ? reason[paren..].Trim('(', ')', ' ') : null;
+            _ = SaveInfractionAsync(req, sid, type, details);
+        }
+
         if (_autokick.GetBool())
             _clientManager.KickClient(client, $"KZ: {reason}");
         else
             client.Print(HudPrintChannel.Chat, $"[KZ] Anticheat flagged: {reason}.");
+    }
+
+    private async System.Threading.Tasks.Task SaveInfractionAsync(IRequestManager req, SteamID sid, string type, string? details)
+    {
+        try { await req.SaveInfractionAsync(sid, type, details); }
+        catch (Exception e) { _logger.LogError(e, "[KZ.AC] failed to persist infraction for {Sid}", sid); }
     }
 
     private static string? FirstViolation(IGameClient client)

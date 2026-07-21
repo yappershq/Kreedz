@@ -133,6 +133,9 @@ public interface IRequestManager
     /// <summary>The player's active (unexpired) ban, or null. If several exist, the latest-expiring one.</summary>
     Task<BanRecord?> GetActiveBanAsync(SteamID steamId);
 
+    /// <summary>Persist an anticheat infraction (a detector flag) for later review.</summary>
+    Task SaveInfractionAsync(SteamID steamId, string type, string? details);
+
 #endregion
 
 #region Preferences
