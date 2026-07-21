@@ -16,7 +16,7 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 | Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
 | Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
 | Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
-| HUD | 🟡 | Speed/keys/mode/tp only. Missing run time, PB delta, checkpoint count, paused/spectator HUD. |
+| HUD | 🟡 | Run timer + paused + speed/keys/mode/tp. Missing PB delta (needs cached PB), checkpoint count, spectator/replay HUD. |
 | DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
 | Global API | 🟡 | Submit-only client (hello + NewRecord). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. |
