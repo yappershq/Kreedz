@@ -1,41 +1,42 @@
 # KZ Port — Status
 
-A 1:1 feature reimplementation of [KZGlobalteam/cs2kz-metamod](https://github.com/KZGlobalteam/cs2kz-metamod)
-built on a fork of [Source2Surf/Timer](https://github.com/Source2Surf/Timer). Every named subsystem has
-real, working, `-c Release`-green code. See `KZ_PORT_PLAN.md` for the architecture and `EXTENSIBILITY.md`
-for the 3rd-party mode/style split.
+A reimplementation of [KZGlobalteam/cs2kz-metamod](https://github.com/KZGlobalteam/cs2kz-metamod) built
+on a fork of [Source2Surf/Timer](https://github.com/Source2Surf/Timer). The **core loop is built and
+green** (timer, checkpoints, modes, styles, DB, ranks, bans); it is **not yet 1:1** — cs2kz has 31
+subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN.md` for architecture and
+`EXTENSIBILITY.md` for the mode/style plugin split.
 
 ## Subsystems
 
 | System | State | Notes |
 |---|---|---|
-| Timer | ✅ | PRO (0 teleports) / STANDARD (≥1) run semantics on Timer's run timer. |
-| Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`, teleport counter → Pro/Standard. |
-| Modes | ✅ | External plugins `Kreedz.Mode.VNL` + `Kreedz.Mode.CKZ` (real cs2kz prestrafe/perf math) via `IKzModeRegistry`. |
-| Styles | ✅ | External plugins `Kreedz.Style.{ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly}` via `IKzStyleRegistry`. |
+| Timer | 🟡 | PRO/STANDARD run semantics done. Missing: named courses (mapping-API), split zones, strict start-validation gate, global submission/announce flow. |
+| Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`. Startpos not DB-persisted. |
+| Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. Convar coverage 13/33 (VNL) & 17/33 (CKZ); registry has no movement-callback API. |
+| Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
 | Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
-| Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. NOT the full cs2kz stat set (strafes/sync/gain/height/airtime, jump-type classification, invalidation, edge distance). |
-| HUD | ✅ | Center-HTML speed / keys / mode / tp panel (flash-fixed). |
-| DB | ✅ | SqlSugar dual-backend + LiteDB fallback; `kz_bans`, `kz_preferences`, teleports persisted. |
+| Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
+| HUD | 🟡 | Speed/keys/mode/tp only. Missing run time, PB delta, checkpoint count, paused/spectator HUD. |
+| DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
-| Global API | ✅ | WebSocket client to api.cs2kz.org (hello/hello_ack + NewRecord). Dormant without `kz_global_apikey`. |
-| Anticheat | ✅ | Invalid-cvar + bhop-hack (inhuman perf-chain) detectors. |
-| Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted across restarts. |
-| Preferences | ✅ | Mode / FOV / styles persist across reconnect. |
-| Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`. |
+| Global API | 🟡 | Submit-only client (hello + NewRecord). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. |
+| Anticheat | 🟡 | 2 of cs2kz's 6 detectors (invalid-cvar + bhop-chain). No telemetry detectors, no infractions DB. |
+| Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted. |
+| Preferences | ✅ | Mode/FOV/styles persist across reconnect (subset of cs2kz option keys). |
+| Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`, `noclip`. |
 
-## The two live-gated asterisks (external, not missing code)
+## Not started (missing subsystems vs cs2kz)
 
-1. **Official global submission** needs a real API key issued by KZGlobalteam — their backend
-   checksum-validates the plugin, which a clean-room reimplementation can't spoof. The client is
-   built and ready; local ranking runs regardless.
-2. **Movement tick-fidelity** — the CKZ prestrafe/perf math is transcribed exactly from source and
-   its boundaries are unit-checked, but certifying leaderboard-identical times needs a live server +
-   recorded cs2kz demos to compare against. Not doable headless.
+- **Mapping API + KZ trigger system** — the biggest gap. Kreedz matches legacy targetnames only, so modern
+  keyvalue-driven kz_ maps (courses, antibhop/teleport/modifier/push triggers) register **no zones**.
+- **Localization** — all output is hardcoded English; cs2kz has a ~30-language phrase system.
+- **saveloc/loadloc**, **quiet (!hide/!hidelegs)**, **beam trails**, **paint**, **ztopwatch** (2-zone practice
+  stopwatch), **profile** (rank titles/clan tag), **spec-by-name/speclist**, **racing/1v1**, **telemetry**.
 
-## Not started (optional / future)
+## Live-gated (need a live CS2 server or an issued key — not doable headless)
 
-- The 4 cs2kz-*planned* styles (Low-Grav, Ice, W/S-only, A/D-only) — upstream hasn't shipped them.
-- Extra AC telemetry detectors (nulls/snaptap, hyperscroll, strafe-hack) — need real movement data to tune.
-- Wiring the 3rd-party mode/style split (contract designed in `EXTENSIBILITY.md`; needs an example plugin).
-- Racing / 1v1.
+1. **CKZ native physics fill** — detours are pass-through; rampbug/slopefix, exact air-accel/ladder physics
+   need tick-for-tick validation vs demos on a real server.
+2. **Official global submission** — needs a real key from KZGlobalteam (their backend checksum-validates the
+   plugin). Client is built; local ranking runs regardless.
+3. **Anticheat tuning** — the telemetry detectors need real movement data to calibrate.
