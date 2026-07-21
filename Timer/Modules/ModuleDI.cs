@@ -47,5 +47,8 @@ internal static class ModuleDI
 
         // KZ port: !goto <player> (cs2kz src/kz/goto).
         services.ImplSingleton<IGotoModule, IModule, GotoModule>();
+
+        // KZ port: !fov <value> (cs2kz src/kz/fov).
+        services.ImplSingleton<IFovModule, IModule, FovModule>();
     }
 }
