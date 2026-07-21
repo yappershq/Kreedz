@@ -341,4 +341,5 @@ healthchecksdb
 
 # secrets
 *.pfx
-*.pem
+*.pem.build/
+.build/

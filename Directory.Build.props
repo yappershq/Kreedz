@@ -1,0 +1,18 @@
+<Project>
+  <!-- Deploy layout for modsharp-deploy: each module → .build/modules/<name>/, Shared → .build/shared/<name>/.
+       Added for the Kreedz gamemode (fork of Source2Surf/Timer); the tools/ project stays out of Kreedz.slnx. -->
+  <PropertyGroup>
+    <KZRoot>$(MSBuildThisFileDirectory)</KZRoot>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputPath>$(KZRoot).build\modules\$(MSBuildProjectName)\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Shared'))">
+    <OutputPath>$(KZRoot).build\shared\$(MSBuildProjectName)\</OutputPath>
+  </PropertyGroup>
+</Project>

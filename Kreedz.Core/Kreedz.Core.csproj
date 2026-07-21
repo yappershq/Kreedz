@@ -4,7 +4,6 @@
 		<ImplicitUsings>disable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<LangVersion>14</LangVersion>
-		<UseCommonOutputDirectory>true</UseCommonOutputDirectory>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <PlatformTarget>x64</PlatformTarget>
         <AssemblyTitle>Kreedz</AssemblyTitle>

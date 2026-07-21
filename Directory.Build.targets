@@ -1,0 +1,8 @@
+<Project>
+  <!-- ModSharp provides Sharp.Shared at core/Sharp.Shared.dll — plugins must NOT ship their own copy
+       (single-ALC TypeLoad risk). Exclude its runtime asset from every module output; .Shared keeps it
+       for compile only via the package's own settings. Imported after the csprojs so the Update applies. -->
+  <ItemGroup Condition="!$(MSBuildProjectName.EndsWith('.Shared'))">
+    <PackageReference Update="ModSharp.Sharp.Shared" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>
