@@ -8,9 +8,13 @@
  * + ban-excluded ranking) and the strict KZ start/end validation gate (via CanStartTimer).
  */
 
+using System;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.GameEntities;
+using Sharp.Shared.Units;
+using Kreedz.Shared.Interfaces;
 using Kreedz.Shared.Interfaces.Listeners;
 using Kreedz.Shared.Models.Timer;
 
@@ -18,7 +22,7 @@ namespace Kreedz.Modules;
 
 internal interface IKzTimerModule;
 
-internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListener
+internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListener, IKzRunService
 {
     private readonly InterfaceBridge        _bridge;
     private readonly ITimerModule           _timerModule;
@@ -45,7 +49,19 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
         return true;
     }
 
+    // Publish the public run-state service so external plugins (HUD/Global) can read timer+cp/tp state
+    // and subscribe to finishes without Core-internal deps.
+    public void OnPostInit(ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzRunService>(
+               _bridge.Entrypoint, IKzRunService.Identity, this);
+
     public void Shutdown() => _timerModule.UnregisterListener(this);
+
+    // ── IKzRunService ─────────────────────────────────────────────────────────
+    public event Action<PlayerSlot, ITimerInfo, int, bool>? RunFinished;
+    ITimerInfo? IKzRunService.GetTimerInfo(PlayerSlot slot)      => _timerModule.GetTimerInfo(slot);
+    int IKzRunService.GetTeleportCount(PlayerSlot slot)          => _checkpointModule.GetTeleportCount(slot);
+    int IKzRunService.GetCheckpointCount(PlayerSlot slot)        => _checkpointModule.GetCheckpointCount(slot);
 
     // Strict start-validation gate (cs2kz KZTimerService::TimerStart). The unambiguous checks that can
     // never reject a legitimate run: the player must be alive and in normal (Walk) movement — so a run
@@ -65,10 +81,13 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
         if (controller.GetGameClient() is not { } client) return;
 
         var teleports = _checkpointModule.GetTeleportCount(client.Slot);
+        var styled    = _styleModule.HasAnyStyle(client.Slot);
         var kind      = teleports == 0 ? "PRO" : "STANDARD";
 
-        var key = _styleModule.HasAnyStyle(client.Slot) ? "Kreedz_Finish_Styled" : "Kreedz_Finish";
+        var key = styled ? "Kreedz_Finish_Styled" : "Kreedz_Finish";
         Loc.Chat(_bridge.LocalizerManager, client, key, FormatTime(timerInfo.Time), kind, teleports);
+
+        RunFinished?.Invoke(client.Slot, timerInfo, teleports, styled);
     }
 
     private static string FormatTime(float seconds)
