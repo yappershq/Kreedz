@@ -28,6 +28,10 @@ internal static class ModuleDI
         services.ImplSingleton<IZoneModule, IModule, ZoneModule>();
         services.ImplSingleton<IMapInfoModule, IModule, MapInfoModule>();
 
+        // KZ port: Mapping API entity-keyvalue source (cs2kz kz_mappingapi) — detours CreateWorldInternal to
+        // read modern kz_ maps' timer_trigger_type/course keyvalues and feed the MappingApiRegistry parser.
+        services.ImplSingleton<IMapApiSource, IModule, MapApiSourceModule>();
+
         services.ImplSingleton<ITimerModule, IModule, TimerModule>();
         services.ImplSingleton<IStyleModule, IModule, StyleModule>();
         services.ImplSingleton<IRecordModule, IModule, RecordModule>();
