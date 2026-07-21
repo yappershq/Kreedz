@@ -62,6 +62,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly int[]   _lastYawDir   = new int[PlayerSlot.MaxPlayerCount];
     private readonly int[]   _overlapTicks = new int[PlayerSlot.MaxPlayerCount]; // both keys of an axis held (cs2kz overlap)
     private readonly int[]   _deadairTicks = new int[PlayerSlot.MaxPlayerCount]; // no directional key held (cs2kz deadAir)
+    private readonly float[] _width        = new float[PlayerSlot.MaxPlayerCount]; // total |yaw delta| over the jump (cs2kz width)
 
     // Jump-type classification state.
     private readonly JumpType[] _prevType    = new JumpType[PlayerSlot.MaxPlayerCount];
@@ -133,6 +134,7 @@ public sealed class KreedzJumpstats : IModSharpModule
             _lastYawDir[slot]    = 0;
             _overlapTicks[slot]  = 0;
             _deadairTicks[slot]  = 0;
+            _width[slot]         = 0f;
         }
         else if (!onGround && _tracking[slot])
         {
@@ -144,6 +146,7 @@ public sealed class KreedzJumpstats : IModSharpModule
             if (h > _maxHeight[slot]) _maxHeight[slot] = h;
 
             var dy2 = NormalizeYaw(yaw - _lastYaw[slot]);
+            _width[slot] += MathF.Abs(dy2);                            // width: total yaw travelled (cs2kz)
             var dir = dy2 > 0.05f ? 1 : dy2 < -0.05f ? -1 : 0;         // strafes: mouse-direction reversals
             if (dir != 0 && _lastYawDir[slot] != 0 && dir != _lastYawDir[slot]) _strafes[slot]++;
             if (dir != 0) _lastYawDir[slot] = dir;
@@ -226,7 +229,7 @@ public sealed class KreedzJumpstats : IModSharpModule
         client.Print(HudPrintChannel.Chat,
             $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
-            $"{overlap:0}% ovl · {deadair:0}% air");
+            $"{overlap:0}% ovl · {deadair:0}% air · {_width[slot]:0}° width");
 
         // Persist the jump (jumpstats DB) — fire-and-forget, degrades to no-op without the request manager.
         if (_request is { } req)
