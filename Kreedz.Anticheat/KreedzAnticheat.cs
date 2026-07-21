@@ -59,6 +59,11 @@ public sealed class KreedzAnticheat : IModSharpModule
     private const int   SnaptapChain   = 128;        // cs2kz NUM_CONSECUTIVE_PERFECT_CSTRAFE minimum
     private readonly int[] _snapChain   = new int[PlayerSlot.MaxPlayerCount];
 
+    // Subtick-abuse flood detector (cs2kz subtick.cpp SUBTICK_SUSPICIOUS_MOVES: 20 in a 0.5s window).
+    private const int SubtickFloodThreshold = 20;
+    private readonly int[] _subtickWindow = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[] _subtickTicks  = new int[PlayerSlot.MaxPlayerCount];
+
     // Strafe-optimizer detector (cs2kz strafe_optimizer.cpp): a scripted optimizer snaps the yaw at the
     // exact optimal strafe-reversal, producing a yaw-accel spike a human mouse can't. Rolling average of
     // spike occurrences; flag past 0.9. Needs 6 angle frames to compute accel at the 3 sample points.
@@ -223,6 +228,18 @@ public sealed class KreedzAnticheat : IModSharpModule
     private unsafe void DetectSnaptap(IGameClient client, PlayerSlot slot, IPlayerProcessMoveForwardParams arg)
     {
         var moves = arg.Info->SubTickMoves.AsReadOnlySpan();
+
+        // Subtick-abuse (flood) check (cs2kz subtick.cpp): a legit tick has only a few subtick input
+        // events; a cheat injecting fake subtick moves floods them. Accumulate over a ~0.5s window.
+        _subtickWindow[slot] += moves.Length;
+        if (++_subtickTicks[slot] >= 32) // ~0.5s at 64t
+        {
+            if (_subtickWindow[slot] >= SubtickFloodThreshold)
+                Flag(client, $"subtick abuse ({_subtickWindow[slot]} subtick moves in 0.5s)");
+            _subtickWindow[slot] = 0;
+            _subtickTicks[slot]  = 0;
+        }
+
         if (moves.Length == 0) return;
 
         float releaseWhen = -1f; UserCommandButtons releaseKey = 0;
