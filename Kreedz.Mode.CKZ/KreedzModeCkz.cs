@@ -47,9 +47,10 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     private const float BhLandingDecrement   = 75.0f;
 
     // rampbug/slopefix constants (cs2kz kz_mode_ckz.h).
-    private const float RampBugThreshold   = 0.98f;   // RAMP_BUG_THRESHOLD
-    private const float RampPierceDistance = 0.0625f; // RAMP_PIERCE_DISTANCE
-    private const float NewRampThreshold   = 0.95f;   // NEW_RAMP_THRESHOLD
+    private const float RampBugThreshold        = 0.98f;   // RAMP_BUG_THRESHOLD
+    private const float RampBugVelocityThreshold = 0.95f;  // RAMP_BUG_VELOCITY_THRESHOLD (post-move commit gate)
+    private const float RampPierceDistance      = 0.0625f; // RAMP_PIERCE_DISTANCE
+    private const float NewRampThreshold        = 0.95f;   // NEW_RAMP_THRESHOLD
     private const int   MaxBumps           = 4;       // MAX_BUMPS
     private const float Epsilon            = 0.00001f;
     private const float FltEpsilon         = 1.192092896e-07f;
@@ -364,12 +365,22 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
             }
         }
 
-        // Apply only when a rampbug was detected+fixed — otherwise the engine's result stands.
+        // Commit only when a rampbug was detected AND the engine's ACTUAL post-move velocity diverged from our
+        // recompute (cs2kz velocityHeavilyModified) — otherwise the engine was already right, so leave it. This
+        // bounds the fix's blast radius to genuine rampbugs.
         if (overrideTPM)
         {
-            ref var md = ref Move(mv);
-            md.AbsOrigin = pm.End;
-            md.Velocity  = velocity;
+            ref var md     = ref Move(mv);
+            var     actual = md.Velocity; // the engine's real post-TryPlayerMove velocity
+            var heavilyModified =
+                Dot(Normalize(velocity), Normalize(actual)) < RampBugThreshold
+                || (Len(velocity) > 50.0f && Len(actual) / Len(velocity) < RampBugVelocityThreshold);
+
+            if (heavilyModified)
+            {
+                md.AbsOrigin = pm.End;
+                md.Velocity  = velocity;
+            }
         }
     }
 
