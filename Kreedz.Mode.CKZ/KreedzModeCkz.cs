@@ -174,6 +174,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
         {
             _landingTime[slot]     = curtime;
             _landingVelocity[slot] = velocity;
+            SlopeFix(arg, slot); // cs2kz OnStartTouchGround → SlopeFix: preserve speed landing on a downward ramp
         }
         else if (!onGround && _wasGround[slot])
         {
@@ -459,6 +460,39 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
                 _leftPreRatio[slot]  = Math.Clamp(_leftPreRatio[slot]  + airReward, 0f, _rightPreRatio[slot]);
             else
                 _rightPreRatio[slot] = Math.Clamp(_rightPreRatio[slot] + airReward, 0f, _leftPreRatio[slot]);
+        }
+    }
+
+    /// <summary>cs2kz KZClassicModeService::SlopeFix — on landing, if the ground is a standable *downward*
+    /// ramp (0.7 ≤ n.z &lt; 1.0), clip the landing velocity against that ramp normal and apply it when it
+    /// gains 2D speed, so you keep momentum down a ramp instead of losing it to the flat-ground clip. Runs
+    /// on the managed landing transition (approximates cs2kz's OnStartTouchGround timing). Uses cs2kz's
+    /// SlopeFix ClipVelocity variant (backoff = dot, NO overbounce — distinct from TryPlayerMove's).</summary>
+    private void SlopeFix(IPlayerProcessMoveForwardParams arg, PlayerSlot slot)
+    {
+        var (mins, maxs) = Hull();
+        var trace = TraceDown(mins, maxs, arg.Pawn.GetAbsOrigin());
+        if (trace.StartInSolid || trace.Fraction == 1.0f)
+            return;
+
+        var n = trace.PlaneNormal;
+        if (n.Z < 0.7f || n.Z >= 1.0f) // only standable ramps — not flat ground, not a wall
+            return;
+
+        var lv      = _landingVelocity[slot];
+        var backoff = Dot(lv, n);
+        var newVel  = new Vector(lv.X - n.X * backoff, lv.Y - n.Y * backoff, lv.Z - n.Z * backoff);
+
+        var adjust = Dot(newVel, n);
+        if (adjust < 0.0f)
+            newVel = new Vector(newVel.X - n.X * adjust, newVel.Y - n.Y * adjust, newVel.Z - n.Z * adjust);
+
+        // Only apply when it actually preserves/gains horizontal speed (going *down* the ramp).
+        if (Length2D(newVel) >= Length2D(lv))
+        {
+            var mv = arg.Info;
+            mv->Velocity           = new Vector(newVel.X, newVel.Y, mv->Velocity.Z);
+            _landingVelocity[slot] = new Vector(newVel.X, newVel.Y, lv.Z);
         }
     }
 
