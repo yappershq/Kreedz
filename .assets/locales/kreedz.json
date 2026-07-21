@@ -33,5 +33,19 @@
   "Kreedz_Cp_None":        { "en-US": " {{green}}[KZ]{{default}} {{red}}No checkpoints set." },
   "Kreedz_Cp_Index":       { "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}/{1}{{default}}." },
   "Kreedz_Cp_StartSet":    { "en-US": " {{green}}[KZ]{{default}} Custom start position set." },
-  "Kreedz_Cp_StartClear":  { "en-US": " {{green}}[KZ]{{default}} Custom start position cleared." }
+  "Kreedz_Cp_StartClear":  { "en-US": " {{green}}[KZ]{{default}} Custom start position cleared." },
+
+  "Kreedz_Ban_Usage":      { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!ban <name|steamid64> <minutes|0=perm> [reason]{{default}}." },
+  "Kreedz_Ban_BadMinutes": { "en-US": " {{green}}[KZ]{{default}} {{red}}Minutes must be a non-negative integer (0 = permanent)." },
+  "Kreedz_Ban_NoTarget":   { "en-US": " {{green}}[KZ]{{default}} {{red}}No connected player or valid SteamID64 matching '{0}'." },
+  "Kreedz_Ban_Done":       { "en-US": " {{green}}[KZ]{{default}} Banned {{lime}}{0}{{default}} {1}." },
+  "Kreedz_Ban_Failed":     { "en-US": " {{green}}[KZ]{{default}} {{red}}Ban failed — see server log." },
+  "Kreedz_Unban_Usage":    { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!unban <steamid64>{{default}}." },
+  "Kreedz_Unban_Done":     { "en-US": " {{green}}[KZ]{{default}} Removed {{lime}}{0}{{default}} ban(s) for {{lime}}{1}{{default}}." },
+  "Kreedz_Unban_None":     { "en-US": " {{green}}[KZ]{{default}} No bans found for {{lime}}{0}{{default}}." },
+  "Kreedz_Unban_Failed":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unban failed — see server log." },
+
+  "Kreedz_Tips_On":        { "en-US": " {{green}}[KZ]{{default}} Tips enabled." },
+  "Kreedz_Tips_Off":       { "en-US": " {{green}}[KZ]{{default}} Tips disabled." },
+  "Kreedz_Tip_Line":       { "en-US": " {{green}}[Tip]{{default}} {0}" }
 }

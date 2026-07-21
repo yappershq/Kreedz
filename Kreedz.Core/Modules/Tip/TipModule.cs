@@ -51,7 +51,7 @@ internal sealed class TipModule : IModule, ITipModule
         {
             _enabled[slot] = !_enabled[slot];
             if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } c)
-                c.Print(HudPrintChannel.Chat, _enabled[slot] ? "Tips enabled." : "Tips disabled.");
+                Loc.Chat(_bridge.LocalizerManager, c, _enabled[slot] ? "Kreedz_Tips_On" : "Kreedz_Tips_Off");
             return ECommandAction.Handled;
         });
 
@@ -73,6 +73,6 @@ internal sealed class TipModule : IModule, ITipModule
 
         foreach (var client in _bridge.ClientManager.GetGameClients(inGame: true))
             if (!client.IsFakeClient && _enabled[client.Slot])
-                client.Print(HudPrintChannel.Chat, $"[Tip] {tip}");
+                Loc.Chat(_bridge.LocalizerManager, client, "Kreedz_Tip_Line", tip);
     }
 }

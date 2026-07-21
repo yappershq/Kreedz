@@ -91,19 +91,19 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
     {
         if (command.ArgCount < 2)
         {
-            Tell(slot, "Usage: !ban <name|steamid64> <minutes|0=perm> [reason]");
+            Msg(slot, "Kreedz_Ban_Usage");
             return ECommandAction.Handled;
         }
 
         if (command.TryGet<int?>(2) is not { } minutes || minutes < 0)
         {
-            Tell(slot, "Minutes must be a non-negative integer (0 = permanent).");
+            Msg(slot, "Kreedz_Ban_BadMinutes");
             return ECommandAction.Handled;
         }
 
         if (ResolveTarget(command.GetArg(1), out var onlineSlot) is not { } target)
         {
-            Tell(slot, $"No connected player or valid SteamID64 matching '{command.GetArg(1)}'.");
+            Msg(slot, "Kreedz_Ban_NoTarget", command.GetArg(1));
             return ECommandAction.Handled;
         }
 
@@ -117,7 +117,7 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
     {
         if (command.ArgCount < 1 || !ulong.TryParse(command.GetArg(1), out var sid) || sid <= MinSteamId64)
         {
-            Tell(slot, "Usage: !unban <steamid64>");
+            Msg(slot, "Kreedz_Unban_Usage");
             return ECommandAction.Handled;
         }
 
@@ -133,8 +133,9 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
 
             _bridge.ModSharp.InvokeFrameAction(() =>
             {
-                var when = expiresAt == DateTime.MaxValue ? "permanently" : $"until {expiresAt:u}";
-                Tell(adminSlot, $"Banned {target} {when}{(reason is null ? "" : $" — {reason}")}.");
+                var when = (expiresAt == DateTime.MaxValue ? "permanently" : $"until {expiresAt:u}")
+                           + (reason is null ? "" : $" — {reason}");
+                Msg(adminSlot, "Kreedz_Ban_Done", target, when);
 
                 if (onlineSlot is { } os
                     && _bridge.ClientManager.GetGameClient(os) is { IsValid: true } client
@@ -145,7 +146,7 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
         catch (Exception e)
         {
             _logger.LogError(e, "[KZ.Ban] ban failed for {Target}", target);
-            _bridge.ModSharp.InvokeFrameAction(() => Tell(adminSlot, "Ban failed — see server log."));
+            _bridge.ModSharp.InvokeFrameAction(() => Msg(adminSlot, "Kreedz_Ban_Failed"));
         }
     }
 
@@ -155,12 +156,15 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
         {
             var removed = await _request.RemoveBansAsync(target);
             _bridge.ModSharp.InvokeFrameAction(() =>
-                Tell(slot, removed > 0 ? $"Removed {removed} ban(s) for {target}." : $"No bans found for {target}."));
+            {
+                if (removed > 0) Msg(slot, "Kreedz_Unban_Done", removed, target);
+                else             Msg(slot, "Kreedz_Unban_None", target);
+            });
         }
         catch (Exception e)
         {
             _logger.LogError(e, "[KZ.Ban] unban failed for {Target}", target);
-            _bridge.ModSharp.InvokeFrameAction(() => Tell(slot, "Unban failed — see server log."));
+            _bridge.ModSharp.InvokeFrameAction(() => Msg(slot, "Kreedz_Unban_Failed"));
         }
     }
 
@@ -204,9 +208,9 @@ internal sealed class BanModule : IModule, IBanModule, IClientListener
 
     private static string KickReason(string? reason) => reason is null ? "KZ: banned" : $"KZ: banned ({reason})";
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }
