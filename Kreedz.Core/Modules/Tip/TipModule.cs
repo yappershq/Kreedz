@@ -20,13 +20,10 @@ internal sealed class TipModule : IModule, ITipModule
 {
     private const double TipIntervalSeconds = 180.0;
 
+    // Localized tip keys (content in kreedz.json) — cycled round-robin.
     private static readonly string[] Tips =
     {
-        "Set a checkpoint with !cp and teleport back with !tp. A run with 0 teleports is a PRO time.",
-        "Switch movement mode with !mode. Stack styles like !abh on top.",
-        "!goto <player> teleports you to someone. !measure gets the distance between two points.",
-        "Set your field of view with !fov <value>, or a custom start with !setstartpos.",
-        "!undo removes your last checkpoint; !prevcp / !nextcp cycle through them.",
+        "Kreedz_Tip_1", "Kreedz_Tip_2", "Kreedz_Tip_3", "Kreedz_Tip_4", "Kreedz_Tip_5",
     };
 
     private readonly InterfaceBridge    _bridge;
@@ -68,11 +65,11 @@ internal sealed class TipModule : IModule, ITipModule
     {
         if (Tips.Length == 0) return;
 
-        var tip = Tips[_next];
+        var tipKey = Tips[_next];
         _next = (_next + 1) % Tips.Length;
 
         foreach (var client in _bridge.ClientManager.GetGameClients(inGame: true))
             if (!client.IsFakeClient && _enabled[client.Slot])
-                Loc.Chat(_bridge.LocalizerManager, client, "Kreedz_Tip_Line", tip);
+                Loc.Chat(_bridge.LocalizerManager, client, tipKey);
     }
 }

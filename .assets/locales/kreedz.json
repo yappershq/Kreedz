@@ -1,51 +1,134 @@
 {
-  "Kreedz_Mode_Current":   { "en-US": " {{green}}[KZ]{{default}} Current mode: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!mode <name>{{default}}." },
-  "Kreedz_Mode_Set":       { "en-US": " {{green}}[KZ]{{default}} Mode set to {{lime}}{0}{{default}}." },
-  "Kreedz_Mode_Unknown":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown mode '{0}'." },
-
-  "Kreedz_Finish":         { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp)." },
-  "Kreedz_Finish_Styled":  { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp) {{grey}}(styled — unranked)." },
-
-  "Kreedz_Goto_Usage":     { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!goto <player>{{default}}." },
-  "Kreedz_Goto_NoMatch":   { "en-US": " {{green}}[KZ]{{default}} {{red}}No player matching '{0}'." },
-
-  "Kreedz_Fov_Usage":      { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!fov <{0}-{1}>{{default}}  (current: {{lime}}{2}{{default}})." },
-  "Kreedz_Fov_Set":        { "en-US": " {{green}}[KZ]{{default}} FOV set to {{lime}}{0}{{default}}." },
-
-  "Kreedz_Measure_A":      { "en-US": " {{green}}[KZ]{{default}} Measure: point {{lime}}A{{default}} set. Move and {{lime}}!measure{{default}} again for point B." },
-  "Kreedz_Measure_Result": { "en-US": " {{green}}[KZ]{{default}} Measure: horizontal {{lime}}{0}u{{default}}, 3D {{lime}}{1}u{{default}}, height {{lime}}{2}u{{default}}." },
-
-  "Kreedz_Pistol_Usage":   { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!pistol <{0}>{{default}}." },
-  "Kreedz_Pistol_Unknown": { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown pistol '{0}'." },
-  "Kreedz_Pistol_Set":     { "en-US": " {{green}}[KZ]{{default}} Pistol set to {{lime}}{0}{{default}}." },
-
-  "Kreedz_Style_List":     { "en-US": " {{green}}[KZ]{{default}} Active styles: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!style <name>{{default}}." },
-  "Kreedz_Style_Unknown":  { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown style '{0}'." },
-  "Kreedz_Style_Enabled":  { "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} enabled." },
-  "Kreedz_Style_Disabled": { "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} disabled." },
-  "Kreedz_Style_Cleared":  { "en-US": " {{green}}[KZ]{{default}} Styles cleared." },
-
-  "Kreedz_Cp_GroundOnly":  { "en-US": " {{green}}[KZ]{{default}} {{red}}You can only set a checkpoint on the ground or a ladder." },
-  "Kreedz_Cp_Set":         { "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}{{default}} set." },
-  "Kreedz_Cp_NoneYet":     { "en-US": " {{green}}[KZ]{{default}} {{red}}No checkpoint set — use {{lime}}!cp{{red}} first." },
-  "Kreedz_Cp_NothingUndo": { "en-US": " {{green}}[KZ]{{default}} {{red}}Nothing to undo." },
-  "Kreedz_Cp_Removed":     { "en-US": " {{green}}[KZ]{{default}} Removed last checkpoint ({{lime}}{0}{{default}} left)." },
-  "Kreedz_Cp_None":        { "en-US": " {{green}}[KZ]{{default}} {{red}}No checkpoints set." },
-  "Kreedz_Cp_Index":       { "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}/{1}{{default}}." },
-  "Kreedz_Cp_StartSet":    { "en-US": " {{green}}[KZ]{{default}} Custom start position set." },
-  "Kreedz_Cp_StartClear":  { "en-US": " {{green}}[KZ]{{default}} Custom start position cleared." },
-
-  "Kreedz_Ban_Usage":      { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!ban <name|steamid64> <minutes|0=perm> [reason]{{default}}." },
-  "Kreedz_Ban_BadMinutes": { "en-US": " {{green}}[KZ]{{default}} {{red}}Minutes must be a non-negative integer (0 = permanent)." },
-  "Kreedz_Ban_NoTarget":   { "en-US": " {{green}}[KZ]{{default}} {{red}}No connected player or valid SteamID64 matching '{0}'." },
-  "Kreedz_Ban_Done":       { "en-US": " {{green}}[KZ]{{default}} Banned {{lime}}{0}{{default}} {1}." },
-  "Kreedz_Ban_Failed":     { "en-US": " {{green}}[KZ]{{default}} {{red}}Ban failed — see server log." },
-  "Kreedz_Unban_Usage":    { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!unban <steamid64>{{default}}." },
-  "Kreedz_Unban_Done":     { "en-US": " {{green}}[KZ]{{default}} Removed {{lime}}{0}{{default}} ban(s) for {{lime}}{1}{{default}}." },
-  "Kreedz_Unban_None":     { "en-US": " {{green}}[KZ]{{default}} No bans found for {{lime}}{0}{{default}}." },
-  "Kreedz_Unban_Failed":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unban failed — see server log." },
-
-  "Kreedz_Tips_On":        { "en-US": " {{green}}[KZ]{{default}} Tips enabled." },
-  "Kreedz_Tips_Off":       { "en-US": " {{green}}[KZ]{{default}} Tips disabled." },
-  "Kreedz_Tip_Line":       { "en-US": " {{green}}[Tip]{{default}} {0}" }
+  "Kreedz_Mode_Current": {
+    "en-US": " {{green}}[KZ]{{default}} Current mode: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!mode <name>{{default}}."
+  },
+  "Kreedz_Mode_Set": {
+    "en-US": " {{green}}[KZ]{{default}} Mode set to {{lime}}{0}{{default}}."
+  },
+  "Kreedz_Mode_Unknown": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown mode '{0}'."
+  },
+  "Kreedz_Finish": {
+    "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp)."
+  },
+  "Kreedz_Finish_Styled": {
+    "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp) {{grey}}(styled — unranked)."
+  },
+  "Kreedz_Goto_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!goto <player>{{default}}."
+  },
+  "Kreedz_Goto_NoMatch": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}No player matching '{0}'."
+  },
+  "Kreedz_Fov_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!fov <{0}-{1}>{{default}}  (current: {{lime}}{2}{{default}})."
+  },
+  "Kreedz_Fov_Set": {
+    "en-US": " {{green}}[KZ]{{default}} FOV set to {{lime}}{0}{{default}}."
+  },
+  "Kreedz_Measure_A": {
+    "en-US": " {{green}}[KZ]{{default}} Measure: point {{lime}}A{{default}} set. Move and {{lime}}!measure{{default}} again for point B."
+  },
+  "Kreedz_Measure_Result": {
+    "en-US": " {{green}}[KZ]{{default}} Measure: horizontal {{lime}}{0}u{{default}}, 3D {{lime}}{1}u{{default}}, height {{lime}}{2}u{{default}}."
+  },
+  "Kreedz_Pistol_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!pistol <{0}>{{default}}."
+  },
+  "Kreedz_Pistol_Unknown": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown pistol '{0}'."
+  },
+  "Kreedz_Pistol_Set": {
+    "en-US": " {{green}}[KZ]{{default}} Pistol set to {{lime}}{0}{{default}}."
+  },
+  "Kreedz_Style_List": {
+    "en-US": " {{green}}[KZ]{{default}} Active styles: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!style <name>{{default}}."
+  },
+  "Kreedz_Style_Unknown": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown style '{0}'."
+  },
+  "Kreedz_Style_Enabled": {
+    "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} enabled."
+  },
+  "Kreedz_Style_Disabled": {
+    "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} disabled."
+  },
+  "Kreedz_Style_Cleared": {
+    "en-US": " {{green}}[KZ]{{default}} Styles cleared."
+  },
+  "Kreedz_Cp_GroundOnly": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}You can only set a checkpoint on the ground or a ladder."
+  },
+  "Kreedz_Cp_Set": {
+    "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}{{default}} set."
+  },
+  "Kreedz_Cp_NoneYet": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}No checkpoint set — use {{lime}}!cp{{red}} first."
+  },
+  "Kreedz_Cp_NothingUndo": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Nothing to undo."
+  },
+  "Kreedz_Cp_Removed": {
+    "en-US": " {{green}}[KZ]{{default}} Removed last checkpoint ({{lime}}{0}{{default}} left)."
+  },
+  "Kreedz_Cp_None": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}No checkpoints set."
+  },
+  "Kreedz_Cp_Index": {
+    "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}/{1}{{default}}."
+  },
+  "Kreedz_Cp_StartSet": {
+    "en-US": " {{green}}[KZ]{{default}} Custom start position set."
+  },
+  "Kreedz_Cp_StartClear": {
+    "en-US": " {{green}}[KZ]{{default}} Custom start position cleared."
+  },
+  "Kreedz_Ban_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!ban <name|steamid64> <minutes|0=perm> [reason]{{default}}."
+  },
+  "Kreedz_Ban_BadMinutes": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Minutes must be a non-negative integer (0 = permanent)."
+  },
+  "Kreedz_Ban_NoTarget": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}No connected player or valid SteamID64 matching '{0}'."
+  },
+  "Kreedz_Ban_Done": {
+    "en-US": " {{green}}[KZ]{{default}} Banned {{lime}}{0}{{default}} {1}."
+  },
+  "Kreedz_Ban_Failed": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Ban failed — see server log."
+  },
+  "Kreedz_Unban_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!unban <steamid64>{{default}}."
+  },
+  "Kreedz_Unban_Done": {
+    "en-US": " {{green}}[KZ]{{default}} Removed {{lime}}{0}{{default}} ban(s) for {{lime}}{1}{{default}}."
+  },
+  "Kreedz_Unban_None": {
+    "en-US": " {{green}}[KZ]{{default}} No bans found for {{lime}}{0}{{default}}."
+  },
+  "Kreedz_Unban_Failed": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Unban failed — see server log."
+  },
+  "Kreedz_Tips_On": {
+    "en-US": " {{green}}[KZ]{{default}} Tips enabled."
+  },
+  "Kreedz_Tips_Off": {
+    "en-US": " {{green}}[KZ]{{default}} Tips disabled."
+  },
+  "Kreedz_Tip_1": {
+    "en-US": " {{green}}[Tip]{{default}} Set a checkpoint with {{lime}}!cp{{default}} and teleport back with {{lime}}!tp{{default}}. A run with 0 teleports is a {{gold}}PRO{{default}} time."
+  },
+  "Kreedz_Tip_2": {
+    "en-US": " {{green}}[Tip]{{default}} Switch movement mode with {{lime}}!mode{{default}}. Stack styles like {{lime}}!abh{{default}} on top."
+  },
+  "Kreedz_Tip_3": {
+    "en-US": " {{green}}[Tip]{{default}} {{lime}}!goto <player>{{default}} teleports you to someone. {{lime}}!measure{{default}} gets the distance between two points."
+  },
+  "Kreedz_Tip_4": {
+    "en-US": " {{green}}[Tip]{{default}} Set your field of view with {{lime}}!fov <value>{{default}}, or a custom start with {{lime}}!setstartpos{{default}}."
+  },
+  "Kreedz_Tip_5": {
+    "en-US": " {{green}}[Tip]{{default}} {{lime}}!undo{{default}} removes your last checkpoint; {{lime}}!prevcp{{default}} / {{lime}}!nextcp{{default}} cycle through them."
+  }
 }
