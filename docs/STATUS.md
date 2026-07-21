@@ -11,9 +11,10 @@ for the 3rd-party mode/style split.
 |---|---|---|
 | Timer | ✅ | PRO (0 teleports) / STANDARD (≥1) run semantics on Timer's run timer. |
 | Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`, teleport counter → Pro/Standard. |
-| Modes | ✅ | VNL (stock) + **CKZ** with the real cs2kz prestrafe + perf math (verbatim constants + formulas). |
-| Styles | ✅ | ABH + LGJ — matches cs2kz's actually-shipped set (only ABH is live upstream). |
-| Jumpstats | ✅ | LJ/BH detection + distance tiers on the movement hook. |
+| Modes | ✅ | External plugins `Kreedz.Mode.VNL` + `Kreedz.Mode.CKZ` (real cs2kz prestrafe/perf math) via `IKzModeRegistry`. |
+| Styles | ✅ | External plugins `Kreedz.Style.{ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly}` via `IKzStyleRegistry`. |
+| Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
+| Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. NOT the full cs2kz stat set (strafes/sync/gain/height/airtime, jump-type classification, invalidation, edge distance). |
 | HUD | ✅ | Center-HTML speed / keys / mode / tp panel (flash-fixed). |
 | DB | ✅ | SqlSugar dual-backend + LiteDB fallback; `kz_bans`, `kz_preferences`, teleports persisted. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
