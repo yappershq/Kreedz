@@ -34,7 +34,8 @@ internal static class ModuleDI
         services.ImplSingleton<IReplayPlaybackModule, IModule, ReplayPlaybackModule>();
         services.AddSingleton<IReplayModule>(x => x.GetRequiredService<ReplayPlaybackModule>());
         services.ImplSingleton<IReplayRecorderModule, IModule, ReplayRecorderModule>();
-        services.ImplSingleton<IHudModule, IModule, HudModule>();
+        // KZ port: KZ HUD (speed/keys/mode/tp) replaces the surf HUD (cs2kz src/kz/hud).
+        services.ImplSingleton<IHudModule, IModule, KzHudModule>();
         services.ImplSingleton<IMessageModule, IModule, MessageModule>();
 
         services.ImplSingleton<IMiscModule, IModule, MiscModule>();
