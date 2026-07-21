@@ -47,6 +47,13 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
 
     public void Shutdown() => _timerModule.UnregisterListener(this);
 
+    // Strict start-validation gate (cs2kz KZTimerService::TimerStart). The unambiguous checks that can
+    // never reject a legitimate run: the player must be alive and in normal (Walk) movement — so a run
+    // can't start while dead or noclipping. cs2kz's debounce checks (JustTeleported/JustLanded/inPerf/
+    // JustNoclipped/valid-jump) need per-tick movement state the timer will own — follow-up.
+    bool ITimerModuleListener.CanStartTimer(IPlayerController controller, IPlayerPawn pawn)
+        => pawn is { IsAlive: true, MoveType: MoveType.Walk };
+
     void ITimerModuleListener.OnPlayerTimerStart(IPlayerController controller, IPlayerPawn pawn, ITimerInfo timerInfo)
     {
         if (controller.GetGameClient() is { } client)
