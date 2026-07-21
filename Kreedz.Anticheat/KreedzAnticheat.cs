@@ -54,6 +54,11 @@ public sealed class KreedzAnticheat : IModSharpModule
     private readonly int[] _lastStrafeDir = new int[PlayerSlot.MaxPlayerCount]; // -1 left, +1 right, 0 none/both
     private readonly int[] _nullsChain    = new int[PlayerSlot.MaxPlayerCount];
 
+    // Subtick snaptap detector (cs2kz nulls): perfect same-subtick counter-strafes no human hits.
+    private const float SnaptapEpsilon = 0.0078125f; // ~1 subtick — release+press this close = perfect
+    private const int   SnaptapChain   = 128;        // cs2kz NUM_CONSECUTIVE_PERFECT_CSTRAFE minimum
+    private readonly int[] _snapChain   = new int[PlayerSlot.MaxPlayerCount];
+
     public string DisplayName   => "[Kreedz] Anticheat";
     public string DisplayAuthor => "yappershq";
 
@@ -146,6 +151,46 @@ public sealed class KreedzAnticheat : IModSharpModule
         }
 
         _wasGround[slot] = onGround;
+
+        DetectSnaptap(client, slot, arg);
+    }
+
+    // Subtick snaptap/nulls detector (cs2kz src/kz/anticheat/detectors/nulls). A snaptap/SOCD device
+    // cancels one strafe key the instant the opposite is pressed — a release + opposite-press at the
+    // SAME subtick `When`, perfectly, every counter-strafe. Humans have an underlap gap. Reads the real
+    // subtick move data (MoveData.SubTickMoves) and counts consecutive same-subtick counter-strafes.
+    private unsafe void DetectSnaptap(IGameClient client, PlayerSlot slot, IPlayerProcessMoveForwardParams arg)
+    {
+        var moves = arg.Info->SubTickMoves.AsReadOnlySpan();
+        if (moves.Length == 0) return;
+
+        float releaseWhen = -1f; UserCommandButtons releaseKey = 0;
+        var strafed = false;
+
+        foreach (ref readonly var m in moves)
+        {
+            if (m.Button is not (UserCommandButtons.MoveLeft or UserCommandButtons.MoveRight)) continue;
+            strafed = true;
+
+            if (!m.Pressed) { releaseWhen = m.When; releaseKey = m.Button; continue; }
+
+            // A press of the opposite strafe key right after releasing the other = a counter-strafe.
+            if (releaseWhen >= 0f && m.Button != releaseKey)
+            {
+                if (MathF.Abs(m.When - releaseWhen) < SnaptapEpsilon) // same subtick → inhumanly perfect
+                {
+                    if (++_snapChain[slot] >= SnaptapChain)
+                    {
+                        Flag(client, $"snaptap ({_snapChain[slot]} perfect same-subtick counter-strafes)");
+                        _snapChain[slot] = 0;
+                    }
+                }
+                else _snapChain[slot] = 0; // real underlap gap = human
+                releaseWhen = -1f;
+            }
+        }
+
+        if (!strafed) _snapChain[slot] = 0;
     }
 
     private void OnPlayerSpawnPost(IPlayerSpawnForwardParams @params)
