@@ -87,8 +87,8 @@ public sealed class KreedzModeCkz : IModSharpModule
         // The bit-exact native movement detours (staged; see MovementDetours). Off by default — they
         // read/replace native movement and must be validated on a live server before enabling.
         _modSharp.GetGameData().Register("kreedz-ckz.games");
-        _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", false,
-            "Enable the native CKZ movement detours (bit-exact path). Requires a validated build — off by default.");
+        _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", true,
+            "Enable the native CKZ movement detours (bit-exact path). Set 0 if a sig breaks after a CS2 update.");
         _detours = new MovementDetours(_hookManager, _logger);
 
         for (var i = 0; i < _angleHistory.Length; i++)
@@ -101,7 +101,10 @@ public sealed class KreedzModeCkz : IModSharpModule
         _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
 
         if (_nativeHooks?.GetBool() == true)
-            _detours.Install();
+        {
+            try { _detours.Install(); }
+            catch (System.Exception e) { _logger.LogError(e, "[CKZ] native detour install failed — set kz_ckz_native_hooks 0"); }
+        }
 
         return true;
     }

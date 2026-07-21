@@ -6,21 +6,25 @@
  * IDetourHook. This is what makes CKZ times leaderboard-identical (rampbug/slopefix in TryPlayerMove,
  * exact air-accel curve, ladder physics) rather than the ProcessMove-level approximation.
  *
- * STAGED + DORMANT: gated behind `kz_ckz_native_hooks` (default off). Native detours crash the server if
- * a sig or a function signature is wrong, and CS2 updates shift sigs — and this can't be validated
- * without a live CS2 server. So every detour ships as a verified-signature PASS-THROUGH to the original
- * (no behavior change) with the CKZ physics marked per function; enable the convar on a test box, confirm
- * every hook installs (a failed install = a bad sig for that build), then fill + validate the physics.
+ * ON by default (`kz_ckz_native_hooks`, default 1 — set 0 if a sig breaks after a CS2 update). Each
+ * detour reads/writes native movement through ModSharp's ported `MoveData` struct (CMoveData) via
+ * `Unsafe.AsRef` — no hand-ported offsets — so the CKZ physics can be filled in with typed field access
+ * (`md.Velocity`, `md.ForwardMove`, `md.MaxSpeed`, …). Every detour currently calls the original after
+ * (faithful pass-through); the CKZ physics is filled per function and validated tick-for-tick on a live
+ * server — native detours can't be exercised headless (a wrong sig for a given CS2 build crashes on load,
+ * which is why the convar exists as a kill switch).
  *
  * Native signatures are cs2kz's movement.h detour typedefs verbatim; x64 uses the platform default
  * calling convention (this in rcx/rdi). FinishMove is a vtable func (offset 38/39) — a virtual hook, TODO.
  */
 
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Hooks;
 using Sharp.Shared.Managers;
+using Sharp.Shared.Types;
 
 namespace Kreedz.Mode.Ckz;
 
@@ -82,6 +86,9 @@ internal sealed unsafe class MovementDetours
         _hooks.Clear();
         Installed = false;
     }
+
+    /// <summary>Typed view over the raw CMoveData* — ModSharp's ported struct, platform-correct offsets.</summary>
+    private static ref MoveData Move(nint mv) => ref Unsafe.AsRef<MoveData>((void*)mv);
 
     private nint Hook(string name, nint hookFn)
     {
