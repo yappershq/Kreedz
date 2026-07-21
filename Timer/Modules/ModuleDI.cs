@@ -50,5 +50,8 @@ internal static class ModuleDI
 
         // KZ port: !fov <value> (cs2kz src/kz/fov).
         services.ImplSingleton<IFovModule, IModule, FovModule>();
+
+        // KZ port: !measure 2-point distance tool (cs2kz src/kz/measure).
+        services.ImplSingleton<IMeasureModule, IModule, MeasureModule>();
     }
 }
