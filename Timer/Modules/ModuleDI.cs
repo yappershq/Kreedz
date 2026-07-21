@@ -44,5 +44,8 @@ internal static class ModuleDI
 
         // KZ port: mode framework + Vanilla mode (cs2kz src/kz/mode; CKZ movement at P5).
         services.ImplSingleton<IModeModule, IModule, ModeModule>();
+
+        // KZ port: !goto <player> (cs2kz src/kz/goto).
+        services.ImplSingleton<IGotoModule, IModule, GotoModule>();
     }
 }
