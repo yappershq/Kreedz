@@ -65,6 +65,7 @@ internal sealed class ModeModule : IModule, IModeModule
     public bool Init()
     {
         Register(new VanillaMode());
+        Register(new ClassicMode());
 
         // Ensure every mode convar can be per-client replicated.
         foreach (var mode in _modes.Values)
@@ -171,5 +172,38 @@ internal sealed class VanillaMode : IKzMode
         ["sv_staminajumpcost"]    = "0.08",
         ["sv_staminalandcost"]    = "0.05",
         ["sv_staminarecoveryrate"] = "60",
+    };
+}
+
+/// <summary>Classic KZ (CKZ) — the gameplay heart. These are cs2kz's verbatim CKZ mode-convar values
+/// (the convar layer of the mode). They give the CKZ movement FEEL — high air-accel strafing, no
+/// stamina, legacy jump/bhop. The bit-faithful custom movement math (prestrafe/perf/rampbug/slopefix,
+/// reimplemented TryPlayerMove) that makes CKZ times leaderboard-exact layers on top at P5 via this
+/// mode's movement hooks.</summary>
+internal sealed class ClassicMode : IKzMode
+{
+    public string Id        => "ckz";
+    public string Name      => "Classic";
+    public string ShortName => "CKZ";
+
+    public IReadOnlyDictionary<string, string> Convars { get; } = new Dictionary<string, string>
+    {
+        ["sv_accelerate"]               = "6.5",
+        ["sv_airaccelerate"]            = "100",
+        ["sv_air_max_wishspeed"]        = "30",
+        ["sv_autobunnyhopping"]         = "false",
+        ["sv_enablebunnyhopping"]       = "true",
+        ["sv_friction"]                 = "5.2",
+        ["sv_gravity"]                  = "800",
+        ["sv_jump_impulse"]             = "302",
+        ["sv_maxspeed"]                 = "320",
+        ["sv_staminamax"]               = "0",
+        ["sv_staminajumpcost"]          = "0",
+        ["sv_staminalandcost"]          = "0",
+        ["sv_staminarecoveryrate"]      = "9999",
+        ["sv_timebetweenducks"]         = "0",
+        ["sv_legacy_jump"]              = "true",
+        ["sv_standable_normal"]         = "0.7",
+        ["sv_walkable_normal"]          = "0.7",
     };
 }
