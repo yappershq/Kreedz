@@ -64,9 +64,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
         _commandManager.AddClientChatCommand("removestyle", (s, c) => { SetStyle(s, Arg(c), false); return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("clearstyles", (s, _) => { ClearStyles(s); return ECommandAction.Handled; });
 
-        // Built-in styles (external plugins can register more via IKzStyleRegistry).
-        RegisterStyle("abh", "Auto Bhop",   "ABH", new Dictionary<string, string> { ["sv_autobunnyhopping"] = "true", ["sv_enablebunnyhopping"] = "true" });
-        RegisterStyle("lgj", "Legacy Jump", "LGJ", new Dictionary<string, string> { ["sv_legacy_jump"] = "true" });
+        // Styles ship as external plugins (Kreedz.Style.*) that register via IKzStyleRegistry — none built in.
 
         _prefs.Loaded += OnPreferencesLoaded;
         return true;

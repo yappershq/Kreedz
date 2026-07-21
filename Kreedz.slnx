@@ -11,4 +11,10 @@
   </Project>
   <Project Path="Kreedz.Mode.VNL/Kreedz.Mode.VNL.csproj" />
   <Project Path="Kreedz.Mode.CKZ/Kreedz.Mode.CKZ.csproj" />
+  <Project Path="Kreedz.Style.ABH/Kreedz.Style.ABH.csproj" />
+  <Project Path="Kreedz.Style.LGJ/Kreedz.Style.LGJ.csproj" />
+  <Project Path="Kreedz.Style.LowGrav/Kreedz.Style.LowGrav.csproj" />
+  <Project Path="Kreedz.Style.Ice/Kreedz.Style.Ice.csproj" />
+  <Project Path="Kreedz.Style.WSOnly/Kreedz.Style.WSOnly.csproj" />
+  <Project Path="Kreedz.Style.ADOnly/Kreedz.Style.ADOnly.csproj" />
 </Solution>
