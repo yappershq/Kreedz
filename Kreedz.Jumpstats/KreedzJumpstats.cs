@@ -60,6 +60,8 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly float[] _lastSpeed    = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _lastYaw      = new float[PlayerSlot.MaxPlayerCount];
     private readonly int[]   _lastYawDir   = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _overlapTicks = new int[PlayerSlot.MaxPlayerCount]; // both keys of an axis held (cs2kz overlap)
+    private readonly int[]   _deadairTicks = new int[PlayerSlot.MaxPlayerCount]; // no directional key held (cs2kz deadAir)
 
     // Jump-type classification state.
     private readonly JumpType[] _prevType    = new JumpType[PlayerSlot.MaxPlayerCount];
@@ -129,6 +131,8 @@ public sealed class KreedzJumpstats : IModSharpModule
             _lastSpeed[slot]     = horiz;
             _lastYaw[slot]       = yaw;
             _lastYawDir[slot]    = 0;
+            _overlapTicks[slot]  = 0;
+            _deadairTicks[slot]  = 0;
         }
         else if (!onGround && _tracking[slot])
         {
@@ -143,6 +147,15 @@ public sealed class KreedzJumpstats : IModSharpModule
             var dir = dy2 > 0.05f ? 1 : dy2 < -0.05f ? -1 : 0;         // strafes: mouse-direction reversals
             if (dir != 0 && _lastYawDir[slot] != 0 && dir != _lastYawDir[slot]) _strafes[slot]++;
             if (dir != 0) _lastYawDir[slot] = dir;
+
+            // cs2kz overlap (both keys of an axis held) / deadAir (no directional key) — from the held buttons.
+            var btns   = arg.Service.KeyButtons;
+            var anyDir = (btns & (UserCommandButtons.Forward | UserCommandButtons.Back | UserCommandButtons.MoveLeft | UserCommandButtons.MoveRight)) != 0;
+            if ((btns.HasFlag(UserCommandButtons.MoveLeft) && btns.HasFlag(UserCommandButtons.MoveRight))
+                || (btns.HasFlag(UserCommandButtons.Forward) && btns.HasFlag(UserCommandButtons.Back)))
+                _overlapTicks[slot]++;
+            else if (!anyDir)
+                _deadairTicks[slot]++;
 
             _lastSpeed[slot] = horiz;
             _lastYaw[slot]   = yaw;
@@ -205,12 +218,15 @@ public sealed class KreedzJumpstats : IModSharpModule
         var label   = Label(type);
         var sync    = _airTicks[slot] > 0 ? 100f * _gainTicks[slot] / _airTicks[slot] : 0f;
         var gain    = _maxSpeed[slot] - _takeoffSpeed[slot];
+        var overlap = _airTicks[slot] > 0 ? 100f * _overlapTicks[slot] / _airTicks[slot] : 0f;
+        var deadair = _airTicks[slot] > 0 ? 100f * _deadairTicks[slot] / _airTicks[slot] : 0f;
 
         if (_clientManager.GetGameClient(slot) is not { IsFakeClient: false } client) return;
 
         client.Print(HudPrintChannel.Chat,
             $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · " +
-            $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height");
+            $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
+            $"{overlap:0}% ovl · {deadair:0}% air");
 
         // Persist the jump (jumpstats DB) — fire-and-forget, degrades to no-op without the request manager.
         if (_request is { } req)
