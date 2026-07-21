@@ -37,8 +37,7 @@ internal static class ModuleDI
         // KZ port: KZ HUD (speed/keys/mode/tp) replaces the surf HUD (cs2kz src/kz/hud).
         services.ImplSingleton<IHudModule, IModule, KzHudModule>();
 
-        // KZ port: CKZ prestrafe movement foundation (cs2kz movement/kz_mode_ckz).
-        services.ImplSingleton<ICkzMovementModule, IModule, CkzMovementModule>();
+        // KZ port: CKZ movement now ships as the external Kreedz.Mode.CKZ plugin (registers via IKzModeRegistry).
         services.ImplSingleton<IMessageModule, IModule, MessageModule>();
 
         services.ImplSingleton<IMiscModule, IModule, MiscModule>();

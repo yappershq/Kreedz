@@ -81,6 +81,7 @@ internal class InterfaceBridge
             Directory.CreateDirectory(TimerDataPath);
         }
 
+        SharpModuleManager   = sharedSystem.GetSharpModuleManager();
         ModSharp             = sharedSystem.GetModSharp();
         ConVarManager        = sharedSystem.GetConVarManager();
         EventManager         = sharedSystem.GetEventManager();
@@ -114,6 +115,12 @@ internal class InterfaceBridge
 
     public IModSharp             ModSharp { get; }
     public ILibraryModuleManager Modules  { get; }
+
+    /// <summary>The Core plugin instance — the owner for RegisterSharpModuleInterface publishes.</summary>
+    public Sharp.Shared.IModSharpModule Entrypoint => _entrypoint;
+
+    /// <summary>Cross-plugin interface registry (publish Core services / consume external ones).</summary>
+    public ISharpModuleManager SharpModuleManager { get; }
 
     public IConVarManager        ConVarManager        { get; }
     public IEventManager         EventManager         { get; }

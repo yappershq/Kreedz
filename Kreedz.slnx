@@ -9,4 +9,6 @@
   <Project Path="Kreedz.Core/Kreedz.Core.csproj">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
+  <Project Path="Kreedz.Mode.VNL/Kreedz.Mode.VNL.csproj" />
+  <Project Path="Kreedz.Mode.CKZ/Kreedz.Mode.CKZ.csproj" />
 </Solution>

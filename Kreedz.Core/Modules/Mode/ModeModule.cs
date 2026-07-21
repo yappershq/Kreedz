@@ -1,19 +1,18 @@
 /*
- * yappershq/Timer (KZ) — CS2KZ port
+ * yappershq/Kreedz (KZ) — CS2KZ port
  *
- * KZ mode framework (1:1 cs2kz src/kz/mode + movement modes). A "mode" is the base movement ruleset;
- * each supplies a set of movement convar values that are replicated per-player, and (for CKZ) a custom
- * movement model. This module owns the mode registry, per-player current mode, `!mode`/`kz_mode`
- * switching, and per-player convar application on switch + spawn.
- *
- * Modes registered now: **Vanilla (VNL)** — faithful CS2 movement (real CS2 convar defaults), which is
- * decision-independent and correct via stock movement. **Classic (CKZ)** — the gameplay heart — needs
- * the bit-faithful custom movement port (prestrafe/perf/rampbug/slopefix); that lands at P5 and plugs
- * into this same framework (a CKZ IKzMode whose OnProcessMovement runs the ported physics).
+ * KZ mode framework (1:1 cs2kz src/kz/mode). A "mode" is the base movement ruleset — a set of movement
+ * convar values replicated per-player, plus (for CKZ) a custom movement model. This module is the
+ * REGISTRY: it owns the per-player current mode, the `!mode` command + per-mode short commands, and
+ * applies the registered convars on switch/spawn. It publishes IKzModeRegistry so modes ship as separate
+ * plugins (Kreedz.Mode.VNL, Kreedz.Mode.CKZ) that register their convar layer + own their movement hooks,
+ * exactly like cs2kz's mode plugins. No mode is hard-coded here.
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
@@ -32,16 +31,7 @@ internal interface IModeModule
     void Reapply(PlayerSlot slot);
 }
 
-/// <summary>A KZ movement mode: an id/name + the movement convar values it replicates per-player.</summary>
-internal interface IKzMode
-{
-    string Id        { get; } // "vnl"
-    string Name      { get; } // "Vanilla"
-    string ShortName { get; } // "VNL"
-    IReadOnlyDictionary<string, string> Convars { get; }
-}
-
-internal sealed class ModeModule : IModule, IModeModule
+internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
 {
     private const string DefaultMode = "vnl";
 
@@ -50,10 +40,14 @@ internal sealed class ModeModule : IModule, IModeModule
     private readonly IPreferencesModule  _prefs;
     private readonly ILogger<ModeModule> _logger;
 
-    private readonly Dictionary<string, IKzMode> _modes = new(System.StringComparer.OrdinalIgnoreCase);
+    private readonly record struct ModeInfo(string Name, string ShortName, IReadOnlyDictionary<string, string> Convars);
+
+    private readonly Dictionary<string, ModeInfo> _modes = new(StringComparer.OrdinalIgnoreCase);
     private readonly string[] _current = new string[PlayerSlot.MaxPlayerCount];
 
     private const string PrefKey = "mode";
+
+    public event Action<PlayerSlot, string>? PlayerModeChanged;
 
     public ModeModule(InterfaceBridge bridge, ICommandManager commandManager, IPreferencesModule prefs, ILogger<ModeModule> logger)
     {
@@ -68,21 +62,16 @@ internal sealed class ModeModule : IModule, IModeModule
 
     public bool Init()
     {
-        Register(new VanillaMode());
-        Register(new ClassicMode());
-
-        // Ensure every mode convar can be per-client replicated.
-        foreach (var mode in _modes.Values)
-            foreach (var name in mode.Convars.Keys)
-                if (_bridge.ConVarManager.FindConVar(name) is { } cv)
-                    cv.Flags |= ConVarFlags.Replicated;
-
         _commandManager.AddClientChatCommand("mode", OnCommandMode);
-
         _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
         _prefs.Loaded += OnPreferencesLoaded;
         return true;
     }
+
+    // Publish the registry so external mode plugins can register in their OnAllSharpModulesLoaded.
+    public void OnPostInit(ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzModeRegistry>(
+               _bridge.Entrypoint, IKzModeRegistry.Identity, this);
 
     public void Shutdown()
     {
@@ -90,30 +79,32 @@ internal sealed class ModeModule : IModule, IModeModule
         _prefs.Loaded -= OnPreferencesLoaded;
     }
 
-    // Restore the player's saved mode once their preferences load (applies convars immediately).
-    private void OnPreferencesLoaded(PlayerSlot slot)
+    // ── IKzModeRegistry ───────────────────────────────────────────────────────
+    public void RegisterMode(string id, string name, string shortName, IReadOnlyDictionary<string, string> convars)
     {
-        if (_prefs.Get(slot, PrefKey) is { } id && _modes.ContainsKey(id))
-        {
-            _current[slot] = id;
-            Reapply(slot);
-        }
+        var isNew = !_modes.ContainsKey(id);
+        _modes[id] = new ModeInfo(name, shortName, convars);
+
+        foreach (var cvar in convars.Keys)
+            if (_bridge.ConVarManager.FindConVar(cvar) is { } cv)
+                cv.Flags |= ConVarFlags.Replicated;
+
+        if (isNew)
+            _commandManager.AddClientChatCommand(id, (slot, _) => { SwitchMode(slot, id); return ECommandAction.Handled; });
+
+        _logger.LogInformation("[KZ.Mode] registered mode {Id} ({Short})", id, shortName);
     }
 
+    public string GetPlayerMode(PlayerSlot slot) => _current[slot];
+
+    // ── IModeModule (internal) ────────────────────────────────────────────────
     public string GetMode(PlayerSlot slot) => _current[slot];
 
     public void Reapply(PlayerSlot slot)
     {
-        if (_modes.GetValueOrDefault(_current[slot]) is { } mode
+        if (_modes.TryGetValue(_current[slot], out var mode)
             && _bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
             Apply(client, mode);
-    }
-
-    private void Register(IKzMode mode)
-    {
-        _modes[mode.Id] = mode;
-        // Each mode also gets a short switch command, e.g. !vnl.
-        _commandManager.AddClientChatCommand(mode.Id, (slot, _) => { SwitchMode(slot, mode.Id); return ECommandAction.Handled; });
     }
 
     private ECommandAction OnCommandMode(PlayerSlot slot, Sharp.Shared.Types.StringCommand command)
@@ -124,22 +115,23 @@ internal sealed class ModeModule : IModule, IModeModule
             return ECommandAction.Handled;
         }
 
-        // No arg: report current + list available.
-        var names = string.Join(", ", _modes.Values.Select(m => m.ShortName));
+        var names = _modes.Count == 0 ? "(none installed)" : string.Join(", ", _modes.Values.Select(m => m.ShortName));
         Tell(slot, $"Current mode: {ModeName(_current[slot])}. Available: {names}. Use !mode <name>.");
         return ECommandAction.Handled;
     }
 
     private void SwitchMode(PlayerSlot slot, string id)
     {
-        if (_modes.GetValueOrDefault(id) is not { } mode)
+        if (!_modes.TryGetValue(id, out var mode))
         {
             Tell(slot, $"Unknown mode '{id}'.");
             return;
         }
 
-        _current[slot] = mode.Id;
-        _prefs.Set(slot, PrefKey, mode.Id);
+        _current[slot] = id;
+        _prefs.Set(slot, PrefKey, id);
+        PlayerModeChanged?.Invoke(slot, id);
+
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
         {
             Apply(client, mode);
@@ -147,83 +139,34 @@ internal sealed class ModeModule : IModule, IModeModule
         }
     }
 
+    private void OnPreferencesLoaded(PlayerSlot slot)
+    {
+        if (_prefs.Get(slot, PrefKey) is { } id && _modes.ContainsKey(id))
+        {
+            _current[slot] = id;
+            PlayerModeChanged?.Invoke(slot, id);
+            Reapply(slot);
+        }
+    }
+
     private void OnPlayerSpawnPost(IPlayerSpawnForwardParams @params)
     {
         var slot = @params.Client.Slot;
-        if (_modes.GetValueOrDefault(_current[slot]) is { } mode && !@params.Client.IsFakeClient)
+        if (!@params.Client.IsFakeClient && _modes.TryGetValue(_current[slot], out var mode))
             Apply(@params.Client, mode);
     }
 
-    private void Apply(IGameClient client, IKzMode mode)
+    private void Apply(IGameClient client, ModeInfo mode)
     {
         foreach (var (name, value) in mode.Convars)
             _bridge.ConVarManager.FindConVar(name)?.ReplicateToClient(client, value);
     }
 
-    private string ModeName(string id) => _modes.GetValueOrDefault(id)?.Name ?? id;
+    private string ModeName(string id) => _modes.TryGetValue(id, out var m) ? m.Name : id;
 
     private void Tell(PlayerSlot slot, string message)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
             client.Print(HudPrintChannel.Chat, message);
     }
-}
-
-/// <summary>Vanilla (VNL) — faithful CS2 movement: real CS2 convar defaults. The full mode-convar set
-/// (33 values) is completed alongside the P5 movement port; these are the core movement ones.</summary>
-internal sealed class VanillaMode : IKzMode
-{
-    public string Id        => "vnl";
-    public string Name      => "Vanilla";
-    public string ShortName => "VNL";
-
-    public IReadOnlyDictionary<string, string> Convars { get; } = new Dictionary<string, string>
-    {
-        ["sv_accelerate"]         = "5.5",
-        ["sv_airaccelerate"]      = "12",
-        ["sv_air_max_wishspeed"]  = "30",
-        ["sv_friction"]           = "5.2",
-        ["sv_gravity"]            = "800",
-        ["sv_jump_impulse"]       = "301.993377",
-        ["sv_maxspeed"]           = "320",
-        ["sv_autobunnyhopping"]   = "false",
-        ["sv_enablebunnyhopping"] = "false",
-        ["sv_staminamax"]         = "80",
-        ["sv_staminajumpcost"]    = "0.08",
-        ["sv_staminalandcost"]    = "0.05",
-        ["sv_staminarecoveryrate"] = "60",
-    };
-}
-
-/// <summary>Classic KZ (CKZ) — the gameplay heart. These are cs2kz's verbatim CKZ mode-convar values
-/// (the convar layer of the mode). They give the CKZ movement FEEL — high air-accel strafing, no
-/// stamina, legacy jump/bhop. The bit-faithful custom movement math (prestrafe/perf/rampbug/slopefix,
-/// reimplemented TryPlayerMove) that makes CKZ times leaderboard-exact layers on top at P5 via this
-/// mode's movement hooks.</summary>
-internal sealed class ClassicMode : IKzMode
-{
-    public string Id        => "ckz";
-    public string Name      => "Classic";
-    public string ShortName => "CKZ";
-
-    public IReadOnlyDictionary<string, string> Convars { get; } = new Dictionary<string, string>
-    {
-        ["sv_accelerate"]               = "6.5",
-        ["sv_airaccelerate"]            = "100",
-        ["sv_air_max_wishspeed"]        = "30",
-        ["sv_autobunnyhopping"]         = "false",
-        ["sv_enablebunnyhopping"]       = "true",
-        ["sv_friction"]                 = "5.2",
-        ["sv_gravity"]                  = "800",
-        ["sv_jump_impulse"]             = "302",
-        ["sv_maxspeed"]                 = "320",
-        ["sv_staminamax"]               = "0",
-        ["sv_staminajumpcost"]          = "0",
-        ["sv_staminalandcost"]          = "0",
-        ["sv_staminarecoveryrate"]      = "9999",
-        ["sv_timebetweenducks"]         = "0",
-        ["sv_legacy_jump"]              = "true",
-        ["sv_standable_normal"]         = "0.7",
-        ["sv_walkable_normal"]          = "0.7",
-    };
 }

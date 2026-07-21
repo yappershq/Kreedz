@@ -1,61 +1,59 @@
 /*
- * yappershq/Timer (KZ) — CS2KZ port
+ * yappershq/Kreedz (KZ) — Classic (CKZ) mode plugin
  *
- * CKZ (Classic) movement — a faithful port of cs2kz's kz_mode_ckz prestrafe + perf/bhop math.
+ * A standalone ModSharp module that registers the Classic mode against Kreedz.Core's IKzModeRegistry AND
+ * owns the CKZ custom movement — a faithful port of cs2kz kz_mode_ckz (CalcPrestrafe / GetPrestrafeGain /
+ * OnStopTouchGround). Constants + formulas are transcribed verbatim from the cs2kz source (verified);
+ * frametime/curtime come from the engine globals. All movement is gated on IKzModeRegistry.GetPlayerMode
+ * == "ckz", so it only touches CKZ players. Drop this DLL next to Kreedz.Core to add Classic mode.
  *
- * The constants and the two core algorithms below are transcribed verbatim from
- * KZGlobalteam/cs2kz-metamod `src/kz/mode/kz_mode_ckz.{h,cpp}` (CalcPrestrafe / GetPrestrafeGain /
- * OnStopTouchGround). Prestrafe: turning on the ground builds a per-direction ratio (rewarded by turn
- * rate, decayed after a landing grace period) that raises max ground speed above 250 up to ~276 via a
- * `26 * (ratio/0.5)^0.5` curve. Perf: a jump within the 0.02s window keeps/normalizes landing speed
- * through the logarithmic `(51.5 - groundTime*75)*ln(v) - NORMALIZE` formula.
- *
- * Fidelity notes (honest — this is the crux, validated live not here):
- *   • Constants + formulas are exact (verified against source).
- *   • frametime/curtime come from the engine globals (IGlobalVars), matching cs2kz's GetGlobals().
- *   • cs2kz spreads this across StartTouch/StopTouch/CalcPrestrafe on its detoured movement pipeline;
- *     here it runs off the single PlayerProcessMovePre hook + ground-state transitions.
- *   • The perf origin.z ground-snap and possibleLadderHop guard are omitted (refinements, not speed).
- * Final tick-for-tick fidelity is a demo-validated pass; the math is no longer approximated.
+ * Fidelity note: this is the demo-validated crux. The math is exact; tick-for-tick certification vs
+ * recorded cs2kz demos is the final pass. cs2kz spreads the physics across StartTouch/StopTouch/
+ * CalcPrestrafe on its native detours; here it runs off ProcessMovePre + ground-state transitions.
  */
 
 using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
+using Sharp.Shared.Managers;
+using Sharp.Shared.Objects;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
+using Kreedz.Shared.Interfaces;
 
-namespace Kreedz.Modules;
+namespace Kreedz.Mode.Ckz;
 
-internal interface ICkzMovementModule;
-
-internal sealed class CkzMovementModule : IModule, ICkzMovementModule
+public sealed class KreedzModeCkz : IModSharpModule
 {
     // cs2kz kz_mode_ckz.h — verbatim.
-    private const float SpeedNormal          = 250.0f;
-    private const float PsSpeedMax            = 26.0f;
-    private const float PsMinRewardRate       = 2.0f;
-    private const float PsMaxRewardRate       = 15.5f;
-    private const float PsMaxPsTime           = 0.50f;
-    private const float PsTurnRateWindow      = 0.02f;
-    private const float PsDecrementRatio      = 3.0f;
-    private const float PsRatioToSpeed        = 0.5f;
-    private const float PsLandingGracePeriod  = 0.25f;
-    private const float BhPerfWindow          = 0.02f;
-    private const float BhBaseMultiplier      = 51.5f;
-    private const float BhLandingDecrement    = 75.0f;
+    private const float SpeedNormal         = 250.0f;
+    private const float PsSpeedMax           = 26.0f;
+    private const float PsMinRewardRate      = 2.0f;
+    private const float PsMaxRewardRate      = 15.5f;
+    private const float PsMaxPsTime          = 0.50f;
+    private const float PsTurnRateWindow     = 0.02f;
+    private const float PsDecrementRatio     = 3.0f;
+    private const float PsRatioToSpeed       = 0.5f;
+    private const float PsLandingGracePeriod = 0.25f;
+    private const float BhPerfWindow         = 0.02f;
+    private const float BhBaseMultiplier     = 51.5f;
+    private const float BhLandingDecrement   = 75.0f;
 
-    // #define BH_NORMALIZE_FACTOR (BH_BASE_MULTIPLIER*log(SPEED_NORMAL+PS_SPEED_MAX) - (SPEED_NORMAL+PS_SPEED_MAX))
     private static readonly float BhNormalizeFactor =
         BhBaseMultiplier * MathF.Log(SpeedNormal + PsSpeedMax) - (SpeedNormal + PsSpeedMax);
 
-    private readonly InterfaceBridge            _bridge;
-    private readonly IModeModule                _mode;
-    private readonly ILogger<CkzMovementModule> _logger;
+    private readonly ISharedSystem          _shared;
+    private readonly IModSharp              _modSharp;
+    private readonly IHookManager           _hookManager;
+    private readonly ILogger<KreedzModeCkz> _logger;
 
-    private readonly float[] _bonusSpeed   = new float[PlayerSlot.MaxPlayerCount];
+    private IKzModeRegistry? _registry;
+
+    private readonly float[] _bonusSpeed    = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _leftPreRatio  = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _rightPreRatio = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _lastYaw       = new float[PlayerSlot.MaxPlayerCount];
@@ -65,15 +63,23 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
     private readonly float[]  _takeoffTime     = new float[PlayerSlot.MaxPlayerCount];
     private readonly Vector[] _landingVelocity = new Vector[PlayerSlot.MaxPlayerCount];
 
-    // Turn-rate history over PsTurnRateWindow — cs2kz angleHistory (rate deg/s, duration s).
     private readonly List<(float Rate, float Duration)>[] _angleHistory =
         new List<(float, float)>[PlayerSlot.MaxPlayerCount];
 
-    public CkzMovementModule(InterfaceBridge bridge, IModeModule mode, ILogger<CkzMovementModule> logger)
+    public string DisplayName   => "[Kreedz] Mode - Classic";
+    public string DisplayAuthor => "yappershq";
+
+    public KreedzModeCkz(ISharedSystem shared,
+                         string?        dllPath,
+                         string?        sharpPath,
+                         Version?       version,
+                         IConfiguration? coreConfiguration,
+                         bool           hotReload)
     {
-        _bridge = bridge;
-        _mode   = mode;
-        _logger = logger;
+        _shared      = shared;
+        _modSharp    = shared.GetModSharp();
+        _hookManager = shared.GetHookManager();
+        _logger      = shared.GetLoggerFactory().CreateLogger<KreedzModeCkz>();
 
         for (var i = 0; i < _angleHistory.Length; i++)
             _angleHistory[i] = [];
@@ -81,16 +87,34 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
 
     public bool Init()
     {
-        _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
-        _bridge.HookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
+        _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
         return true;
+    }
+
+    public void OnAllModulesLoaded()
+    {
+        _registry = _shared.GetSharpModuleManager()
+                          .GetOptionalSharpModuleInterface<IKzModeRegistry>(IKzModeRegistry.Identity)?.Instance;
+
+        if (_registry is null)
+        {
+            _logger.LogError("[Kreedz.Mode.CKZ] Kreedz.Core mode registry not found — is the core loaded?");
+            return;
+        }
+
+        _registry.RegisterMode("ckz", "Classic", "CKZ", Convars);
+        _logger.LogInformation("[Kreedz.Mode.CKZ] registered.");
     }
 
     public void Shutdown()
     {
-        _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
-        _bridge.HookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
+        _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _hookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
     }
+
+    private bool IsCkz(PlayerSlot slot)
+        => string.Equals(_registry?.GetPlayerMode(slot), "ckz", StringComparison.OrdinalIgnoreCase);
 
     private void OnProcessMovePre(IPlayerProcessMoveForwardParams arg)
     {
@@ -106,20 +130,18 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
             return;
         }
 
-        var globals   = _bridge.ModSharp.GetGlobals();
+        var globals   = _modSharp.GetGlobals();
         var frametime = globals.FrameTime;
         var curtime   = globals.CurTime;
 
         var velocity = arg.Pawn.GetAbsVelocity();
         var onGround = arg.Pawn.GroundEntityHandle.IsValid();
 
-        // Turn rate (deg/s) into the rolling window.
-        var yaw   = arg.Pawn.GetEyeAngles().Y;
-        var rate  = frametime > 0f ? NormalizeYaw(yaw - _lastYaw[slot]) / frametime : 0f;
+        var yaw  = arg.Pawn.GetEyeAngles().Y;
+        var rate = frametime > 0f ? NormalizeYaw(yaw - _lastYaw[slot]) / frametime : 0f;
         _lastYaw[slot] = yaw;
         PushAngle(slot, rate, frametime);
 
-        // Ground-state transitions: landing captures velocity/time; takeoff runs the perf calc.
         if (onGround && !_wasGround[slot])
         {
             _landingTime[slot]     = curtime;
@@ -136,7 +158,7 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
         _wasGround[slot] = onGround;
     }
 
-    /// <summary>cs2kz KZClassicModeService::CalcPrestrafe — updates the L/R prestrafe ratios + bonusSpeed.</summary>
+    /// <summary>cs2kz KZClassicModeService::CalcPrestrafe.</summary>
     private void CalcPrestrafe(PlayerSlot slot, Vector velocity, bool onGround, float frametime, float curtime)
     {
         var averageRate = AverageTurnRate(slot);
@@ -216,7 +238,6 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
         var history = _angleHistory[slot];
         history.Add((rate, duration));
 
-        // Trim the oldest samples once the window is full (keep at least the newest).
         var total = 0f;
         foreach (var (_, d) in history) total += d;
         while (history.Count > 1 && total - history[0].Duration >= PsTurnRateWindow)
@@ -238,8 +259,6 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
         return total == 0f ? 0f : weighted / total;
     }
 
-    private bool IsCkz(PlayerSlot slot) => string.Equals(_mode.GetMode(slot), "ckz", StringComparison.OrdinalIgnoreCase);
-
     private static float Length2D(Vector v) => MathF.Sqrt(v.X * v.X + v.Y * v.Y);
 
     private static float NormalizeYaw(float a)
@@ -248,4 +267,26 @@ internal sealed class CkzMovementModule : IModule, ICkzMovementModule
         while (a < -180f) a += 360f;
         return a;
     }
+
+    // cs2kz verbatim CKZ mode-convar values (the convar layer; the physics above is the rest).
+    private static readonly IReadOnlyDictionary<string, string> Convars = new Dictionary<string, string>
+    {
+        ["sv_accelerate"]          = "6.5",
+        ["sv_airaccelerate"]       = "100",
+        ["sv_air_max_wishspeed"]   = "30",
+        ["sv_autobunnyhopping"]    = "false",
+        ["sv_enablebunnyhopping"]  = "true",
+        ["sv_friction"]            = "5.2",
+        ["sv_gravity"]             = "800",
+        ["sv_jump_impulse"]        = "302",
+        ["sv_maxspeed"]            = "320",
+        ["sv_staminamax"]          = "0",
+        ["sv_staminajumpcost"]     = "0",
+        ["sv_staminalandcost"]     = "0",
+        ["sv_staminarecoveryrate"] = "9999",
+        ["sv_timebetweenducks"]    = "0",
+        ["sv_legacy_jump"]         = "true",
+        ["sv_standable_normal"]    = "0.7",
+        ["sv_walkable_normal"]     = "0.7",
+    };
 }

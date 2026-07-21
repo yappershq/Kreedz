@@ -1,19 +1,19 @@
 /*
- * yappershq/Timer (KZ) — CS2KZ port
+ * yappershq/Kreedz (KZ) — CS2KZ port
  *
- * KZ style system (1:1 cs2kz src/kz/style). Styles are STACKABLE movement modifiers layered on top of
- * the base mode (mode → styles, last-wins). Implemented now: **AutoBhop (ABH)** and **LegacyJump (LGJ)**
- * — pure convar styles, fully faithful. **AutoUnduck (AUD)** and the input-driven styles land with the
- * movement hooks at P5 (they need per-tick input manipulation). Style changes revert the mode base then
- * re-apply the active stack, so removing a style cleanly reverts its convars.
+ * KZ style system (1:1 cs2kz src/kz/style). Styles are STACKABLE convar modifiers layered on the base
+ * mode (mode → styles, last-wins). This module is the style REGISTRY: it owns the per-player active
+ * stack, the style commands, and re-applying mode+styles. It publishes IKzStyleRegistry so styles can
+ * ship as separate plugins, and self-registers the built-ins **AutoBhop (ABH)** + **LegacyJump (LGJ)**.
+ * Any active style makes a run a separate (styled/unranked) leaderboard category.
  *
- * Commands: !style [name] (toggle), !addstyle, !removestyle, !togglestyle, !clearstyles.
- * Ranking note: any active style makes a run a separate (styled) leaderboard category — wired when the
- * timer's record submission lands (StyleIDFlags != 0).
+ * Commands: !style [name] (toggle), !addstyle, !removestyle, !togglestyle, !clearstyles + per-style short.
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.Objects;
@@ -29,15 +29,7 @@ internal interface IKzStyleModule
     bool HasAnyStyle(PlayerSlot slot);
 }
 
-internal interface IKzStyle
-{
-    string Id        { get; } // "abh"
-    string Name      { get; } // "Auto Bhop"
-    string ShortName { get; } // "ABH"
-    IReadOnlyDictionary<string, string> Convars { get; }
-}
-
-internal sealed class KzStyleModule : IModule, IKzStyleModule
+internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
 {
     private const string PrefKey = "styles";
 
@@ -47,8 +39,10 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
     private readonly IPreferencesModule     _prefs;
     private readonly ILogger<KzStyleModule> _logger;
 
-    private readonly Dictionary<string, IKzStyle> _styles = new(System.StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string>[]            _active = new HashSet<string>[PlayerSlot.MaxPlayerCount];
+    private readonly record struct StyleInfo(string Name, string ShortName, IReadOnlyDictionary<string, string> Convars);
+
+    private readonly Dictionary<string, StyleInfo> _styles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string>[]             _active = new HashSet<string>[PlayerSlot.MaxPlayerCount];
 
     public KzStyleModule(InterfaceBridge bridge, ICommandManager commandManager, IModeModule modeModule, IPreferencesModule prefs, ILogger<KzStyleModule> logger)
     {
@@ -59,41 +53,56 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
         _logger         = logger;
 
         for (var i = 0; i < _active.Length; i++)
-            _active[i] = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            _active[i] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     public bool Init()
     {
-        Register(new AutoBhopStyle());
-        Register(new LegacyJumpStyle());
-
-        foreach (var style in _styles.Values)
-            foreach (var name in style.Convars.Keys)
-                if (_bridge.ConVarManager.FindConVar(name) is { } cv)
-                    cv.Flags |= ConVarFlags.Replicated;
-
         _commandManager.AddClientChatCommand("style",       (s, c) => { ToggleArg(s, c); return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("togglestyle", (s, c) => { ToggleArg(s, c); return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("addstyle",    (s, c) => { SetStyle(s, Arg(c), true);  return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("removestyle", (s, c) => { SetStyle(s, Arg(c), false); return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("clearstyles", (s, _) => { ClearStyles(s); return ECommandAction.Handled; });
 
+        // Built-in styles (external plugins can register more via IKzStyleRegistry).
+        RegisterStyle("abh", "Auto Bhop",   "ABH", new Dictionary<string, string> { ["sv_autobunnyhopping"] = "true", ["sv_enablebunnyhopping"] = "true" });
+        RegisterStyle("lgj", "Legacy Jump", "LGJ", new Dictionary<string, string> { ["sv_legacy_jump"] = "true" });
+
         _prefs.Loaded += OnPreferencesLoaded;
         return true;
     }
 
+    public void OnPostInit(ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzStyleRegistry>(
+               _bridge.Entrypoint, IKzStyleRegistry.Identity, this);
+
     public void Shutdown() => _prefs.Loaded -= OnPreferencesLoaded;
+
+    // ── IKzStyleRegistry ──────────────────────────────────────────────────────
+    public void RegisterStyle(string id, string name, string shortName, IReadOnlyDictionary<string, string> convars)
+    {
+        var isNew = !_styles.ContainsKey(id);
+        _styles[id] = new StyleInfo(name, shortName, convars);
+
+        foreach (var cvar in convars.Keys)
+            if (_bridge.ConVarManager.FindConVar(cvar) is { } cv)
+                cv.Flags |= ConVarFlags.Replicated;
+
+        if (isNew)
+            _commandManager.AddClientChatCommand(id, (slot, _) => { SetStyle(slot, id, !_active[slot].Contains(id)); return ECommandAction.Handled; });
+    }
+
+    public bool HasStyle(PlayerSlot slot, string id) => _active[slot].Contains(id);
 
     public bool HasAnyStyle(PlayerSlot slot) => _active[slot].Count > 0;
 
-    // Restore the player's saved style stack once preferences load (runs after ModeModule's restore, so
-    // the mode base is already correct when ReapplyAll layers the styles on top).
+    // ──────────────────────────────────────────────────────────────────────────
     private void OnPreferencesLoaded(PlayerSlot slot)
     {
         if (_prefs.Get(slot, PrefKey) is not { Length: > 0 } raw) return;
 
         _active[slot].Clear();
-        foreach (var id in raw.Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries))
+        foreach (var id in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             if (_styles.ContainsKey(id))
                 _active[slot].Add(id);
 
@@ -101,12 +110,6 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
     }
 
     private void Persist(PlayerSlot slot) => _prefs.Set(slot, PrefKey, string.Join(',', _active[slot]));
-
-    private void Register(IKzStyle style)
-    {
-        _styles[style.Id] = style;
-        _commandManager.AddClientChatCommand(style.Id, (slot, _) => { SetStyle(slot, style.Id, !_active[slot].Contains(style.Id)); return ECommandAction.Handled; });
-    }
 
     private static string? Arg(StringCommand c) => c.ArgCount >= 1 ? c.GetArg(1) : null;
 
@@ -124,14 +127,14 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
 
     private void SetStyle(PlayerSlot slot, string? id, bool enable)
     {
-        if (id is null || _styles.GetValueOrDefault(id) is not { } style)
+        if (id is null || !_styles.TryGetValue(id, out var style))
         {
             Tell(slot, $"Unknown style '{id}'.");
             return;
         }
 
-        if (enable) _active[slot].Add(style.Id);
-        else        _active[slot].Remove(style.Id);
+        if (enable) _active[slot].Add(id);
+        else        _active[slot].Remove(id);
 
         Persist(slot);
         ReapplyAll(slot);
@@ -153,7 +156,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
 
         if (_bridge.ClientManager.GetGameClient(slot) is not { IsFakeClient: false } client) return;
         foreach (var id in _active[slot])
-            if (_styles.GetValueOrDefault(id) is { } style)
+            if (_styles.TryGetValue(id, out var style))
                 foreach (var (name, value) in style.Convars)
                     _bridge.ConVarManager.FindConVar(name)?.ReplicateToClient(client, value);
     }
@@ -163,27 +166,4 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
             client.Print(HudPrintChannel.Chat, message);
     }
-}
-
-internal sealed class AutoBhopStyle : IKzStyle
-{
-    public string Id        => "abh";
-    public string Name      => "Auto Bhop";
-    public string ShortName => "ABH";
-    public IReadOnlyDictionary<string, string> Convars { get; } = new Dictionary<string, string>
-    {
-        ["sv_autobunnyhopping"]   = "true",
-        ["sv_enablebunnyhopping"] = "true",
-    };
-}
-
-internal sealed class LegacyJumpStyle : IKzStyle
-{
-    public string Id        => "lgj";
-    public string Name      => "Legacy Jump";
-    public string ShortName => "LGJ";
-    public IReadOnlyDictionary<string, string> Convars { get; } = new Dictionary<string, string>
-    {
-        ["sv_legacy_jump"] = "true",
-    };
 }
