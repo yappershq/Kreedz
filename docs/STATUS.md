@@ -14,7 +14,7 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 | Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`. Startpos not DB-persisted. |
 | Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. **Full 33/33 convar layer** now; registry still has no movement-callback API (3rd-party modes can't add custom physics hooks yet). |
 | Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
-| Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
+| Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default. **Rampbug fix FILLED** into CategorizePosition (real physics via `{ms→slot}` map + `TraceShapePlayerMovement`); other detours pass-through. TryPlayerMove collision loop + FinishMove vhook = next fills. All experimental, need demo validation. |
 | Jumpstats | 🟡 | External `Kreedz.Jumpstats` plugin. **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
 | HUD | 🟡 | External `Kreedz.Hud` plugin (reads `IKzRunService`+`IKzModeRegistry`). Run timer + paused + CP/TP + speed/keys/mode. Missing PB delta (needs cached PB), spectator/replay HUD. |
 | DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
