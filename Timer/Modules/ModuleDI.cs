@@ -41,5 +41,8 @@ internal static class ModuleDI
 
         // KZ port: cp/tp save-loc practice system (net-new; cs2kz src/kz/checkpoint).
         services.ImplSingleton<ICheckpointModule, IModule, CheckpointModule>();
+
+        // KZ port: mode framework + Vanilla mode (cs2kz src/kz/mode; CKZ movement at P5).
+        services.ImplSingleton<IModeModule, IModule, ModeModule>();
     }
 }
