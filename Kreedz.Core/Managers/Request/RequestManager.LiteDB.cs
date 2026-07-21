@@ -253,8 +253,14 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
 
         newMap.Tier[0] = 1;
 
-        var newId = col.Insert(newMap);
-        newMap.MapId = (ulong) newId.AsInt64;
+        // MapId is the LiteDB _id (.Id(x => x.MapId)). ulong is NOT an auto-increment id type in LiteDB, so a
+        // fresh insert leaves _id=0 and the next new map collides ("duplicate key _id 0"). Assign the next id
+        // from the current max _id ourselves.
+        var maxId  = col.Max();
+        var nextId = maxId is null || maxId.IsNull || maxId.IsMinValue ? 1L : maxId.AsInt64 + 1L;
+        newMap.MapId = (ulong) nextId;
+
+        col.Insert(newMap);
         _mapIdCache[mapNameKey] = newMap.MapId;
 
         return Task.FromResult(newMap);

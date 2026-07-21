@@ -109,11 +109,8 @@ internal class StyleModule : IModule, IStyleModule, IGameListener, ITimerModuleL
 
     public bool Init()
     {
-        if (!File.Exists(_styleConfigPath))
-        {
-            throw new FileNotFoundException($"File {_styleConfigPath} doesn't exist");
-        }
-
+        // No hard-throw on a missing config: LoadStyleConfig() (OnPostInit) auto-creates a default list when
+        // the file is absent — which is the normal first-run/deploy case (modsharp-deploy ships no live config).
         _bridge.ModSharp.InstallGameListener(this);
 
         _commandManager.AddServerCommand("reload_styles", OnCommandReloadStyles);

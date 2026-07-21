@@ -85,9 +85,9 @@ public sealed class KreedzModeCkz : IModSharpModule
         _hookManager = shared.GetHookManager();
         _logger      = shared.GetLoggerFactory().CreateLogger<KreedzModeCkz>();
 
-        // The bit-exact native movement detours (staged; see MovementDetours). Off by default — they
-        // read/replace native movement and must be validated on a live server before enabling.
-        _modSharp.GetGameData().Register("kreedz-ckz.games");
+        // The bit-exact native movement detours (staged; see MovementDetours). Gamedata registration +
+        // install happen in Init() inside a try/catch — a bad sig after a CS2 update must NOT fail the whole
+        // mode (it should degrade to the managed physics path), so it can't live in the ctor.
         _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", true,
             "Enable the native CKZ movement detours (bit-exact path). Set 0 if a sig breaks after a CS2 update.");
         _tpm = shared.GetConVarManager().CreateConVar("kz_ckz_tpm", false,
@@ -105,8 +105,15 @@ public sealed class KreedzModeCkz : IModSharpModule
 
         if (_nativeHooks?.GetBool() == true)
         {
-            try { _detours.Install(); }
-            catch (System.Exception e) { _logger.LogError(e, "[CKZ] native detour install failed — set kz_ckz_native_hooks 0"); }
+            try
+            {
+                _modSharp.GetGameData().Register("kreedz-ckz.games");
+                _detours.Install();
+            }
+            catch (System.Exception e)
+            {
+                _logger.LogError(e, "[CKZ] native detours unavailable (gamedata/sig failure) — running managed physics only. Set kz_ckz_native_hooks 0 to silence.");
+            }
         }
 
         _detours.TpmEnabled = _tpm?.GetBool() == true;

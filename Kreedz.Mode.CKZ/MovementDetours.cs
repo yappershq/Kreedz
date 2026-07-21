@@ -73,7 +73,11 @@ internal sealed unsafe class MovementDetours
     private static MovementDetours? _self;
 
     // Trampolines to the originals (static so the [UnmanagedCallersOnly] hooks can reach them).
-    private static nint _tProcessMovement, _tAirAccelerate, _tFriction, _tWalkMove, _tAirMove, _tTryPlayerMove,
+    // ProcessMovement + WalkMove are intentionally NOT raw-detoured: ModSharp's server.games.jsonc already
+    // registers those addresses (and mid-func-hooks ProcessMovement for AssignMaxSpeed) and exposes them as
+    // the PlayerProcessMovePre / PlayerWalkMove managed forwards, which CKZ + StyleModule already use.
+    // Re-registering them here collided ("Address ... already exists"); our handlers were pure pass-throughs.
+    private static nint _tAirAccelerate, _tFriction, _tAirMove, _tTryPlayerMove,
                         _tCategorizePosition, _tCheckJumpLegacy, _tCheckJumpModern, _tDuck, _tCanUnduck,
                         _tCheckVelocity, _tCheckWater, _tWaterMove, _tLadderMove, _tCheckFalling,
                         _tFullWalkMove, _tMoveInit;
@@ -104,10 +108,8 @@ internal sealed unsafe class MovementDetours
     {
         if (Installed) return;
 
-        _tProcessMovement    = Hook("ProcessMovement",       (nint)(delegate* unmanaged<nint, nint, void>)&Hk_ProcessMovement);
         _tAirAccelerate      = Hook("AirAccelerate",         (nint)(delegate* unmanaged<nint, nint, nint, float, float, void>)&Hk_AirAccelerate);
         _tFriction           = Hook("Friction",              (nint)(delegate* unmanaged<nint, nint, void>)&Hk_Friction);
-        _tWalkMove           = Hook("WalkMove",              (nint)(delegate* unmanaged<nint, nint, void>)&Hk_WalkMove);
         _tAirMove            = Hook("AirMove",               (nint)(delegate* unmanaged<nint, nint, void>)&Hk_AirMove);
         _tTryPlayerMove      = Hook("TryPlayerMove",         (nint)(delegate* unmanaged<nint, nint, nint, nint, nint, void>)&Hk_TryPlayerMove);
         _tCategorizePosition = Hook("CategorizePosition",    (nint)(delegate* unmanaged<nint, nint, byte, void>)&Hk_CategorizePosition);
@@ -194,10 +196,6 @@ internal sealed unsafe class MovementDetours
     // ── Detours: verified-signature PASS-THROUGH. Fill CKZ physics per function, then validate live. ──
     // cs2kz reference: KZClassicModeService::On<Fn> in src/kz/mode/kz_mode_ckz.cpp.
 
-    [UnmanagedCallersOnly]
-    private static void Hk_ProcessMovement(nint ms, nint mv)
-        => ((delegate* unmanaged<nint, nint, void>)_tProcessMovement)(ms, mv);
-
     [UnmanagedCallersOnly] // CKZ: custom air-accel curve (high sv_airaccelerate strafing)
     private static void Hk_AirAccelerate(nint ms, nint mv, nint wishdir, float wishspeed, float accel)
         => ((delegate* unmanaged<nint, nint, nint, float, float, void>)_tAirAccelerate)(ms, mv, wishdir, wishspeed, accel);
@@ -205,10 +203,6 @@ internal sealed unsafe class MovementDetours
     [UnmanagedCallersOnly]
     private static void Hk_Friction(nint ms, nint mv)
         => ((delegate* unmanaged<nint, nint, void>)_tFriction)(ms, mv);
-
-    [UnmanagedCallersOnly]
-    private static void Hk_WalkMove(nint ms, nint mv)
-        => ((delegate* unmanaged<nint, nint, void>)_tWalkMove)(ms, mv);
 
     [UnmanagedCallersOnly] // CKZ OnAirMove/Post: cap air wishspeed at 250 during the air-move, restore 250+gain after
     private static void Hk_AirMove(nint ms, nint mv)

@@ -33,7 +33,7 @@ internal interface IModeModule
 
 internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
 {
-    private const string DefaultMode = "vnl";
+    private const string DefaultMode = "ckz"; // cs2kz server-config.txt: defaultMode "Classic" (CKZ), not Vanilla
 
     private readonly InterfaceBridge     _bridge;
     private readonly ICommandManager     _commandManager;

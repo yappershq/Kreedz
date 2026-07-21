@@ -144,35 +144,27 @@ public class Kreedz : IModSharpModule
             return false;
         }
 
+        return true;
+    }
+
+    // Internal-module PostInit runs here, in the plugin's PostInit — NOT at the end of Init(). Publishers call
+    // RegisterSharpModuleInterface, which ModSharp only accepts once this module is registered+Running; calling
+    // it from Init() threw "Module is not actual IModSharpModule of assembly". ModSharp guarantees every
+    // module's PostInit completes before any OnAllModulesLoaded, so cross-plugin consumers still resolve safely.
+    public void PostInit()
+    {
         foreach (var service in _serviceProvider.GetServices<IManager>())
         {
-            try
-            {
-                service.OnPostInit();
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "An error occurred while calling PostInit for {type}", service.GetType().FullName);
-            }
+            try { service.OnPostInit(); }
+            catch (Exception e) { _logger.LogError(e, "An error occurred while calling PostInit for {type}", service.GetType().FullName); }
         }
 
         foreach (var service in _serviceProvider.GetServices<IModule>())
         {
-            try
-            {
-                service.OnPostInit(_serviceProvider);
-            }
-            catch (Exception e)
-            {
-                _logger.LogError(e, "An error occurred while calling PostInit for {type}", service.GetType().FullName);
-            }
+            try { service.OnPostInit(_serviceProvider); }
+            catch (Exception e) { _logger.LogError(e, "An error occurred while calling PostInit for {type}", service.GetType().FullName); }
         }
 
-        return true;
-    }
-
-    public void PostInit()
-    {
         RefreshRequestManager();
         RefreshCommandManager();
         RefreshReplayProvider();
