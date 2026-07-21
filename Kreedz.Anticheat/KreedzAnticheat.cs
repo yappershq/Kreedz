@@ -5,14 +5,22 @@
  * ISharedSystem primitives (hooks, convars, client manager), no Core-internal services, so it's a clean
  * drop-in that a server can install or omit.
  *
- * Detectors:
+ * Detectors implemented:
  *   1. Invalid client-cvar — illegal client convar values that enable cheating (tampered m_yaw,
  *      out-of-range cl_pitchdown/up), checked on spawn.
- *   2. Bhop-hack — an inhuman chain of consecutive perfect bhops (>=25, each takeoff within the perf
- *      window). No human hits 25 perfs in a row; a scripted bhop does it every jump.
- * Both log and optionally kick (`kz_ac_autokick`, default off — matching cs2kz). All detection is
- * disabled while `sv_cheats 1` and for fake clients. The telemetry detectors (nulls/snaptap, hyperscroll,
- * strafe-optimizer, subtick) layer onto the same movement hook + are tuned against real movement data.
+ *   2. Bhop-hack — an inhuman chain of consecutive perfect bhops (>=25, each takeoff within the perf window).
+ *   3. Nulls — inhumanly clean counter-strafes (per-axis release/press timing).
+ *   4. Snaptap + subtick desubticking — same-subtick counter-strafes / zero-`when` subtick command spam.
+ *   5. Autostrafe — scripted high strafes/sec over a rolling window of jumps.
+ *   6. Strafe-optimizer — scripted yaw-accel pattern.
+ * Flags feed the autoban accumulator (`kz_ac_autoban`, default off) and optionally kick (`kz_ac_autokick`).
+ * All detection is disabled while `sv_cheats 1` and for fake clients.
+ *
+ * NOT yet implemented (cs2kz src/kz/anticheat/detectors/bhop.cpp): the perf-RATIO branch — bhop-hack-by-ratio
+ * (>=0.9) and hyperscroll (>0.6). Faithful port needs a landing-event window (WINDOW_SIZE 30 / MIN_SAMPLE 20)
+ * carrying per-landing jump-input counts (numJumpBefore/After from the subtick press stream) so the
+ * `averagePattern` gate can separate a scroll-spammer from a legit perfect bhopper — WITHOUT that gate a
+ * ratio-only check false-flags good players, so it's deferred rather than shipped half-done.
  */
 
 using System;
