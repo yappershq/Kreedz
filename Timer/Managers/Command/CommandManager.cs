@@ -33,8 +33,10 @@ namespace Source2Surf.Timer.Managers.Command;
 
 internal class CommandManager : IManager, ICommandManager, IClientListener
 {
-    private readonly Dictionary<string, ICommandManager.ClientCommandDelegate> _adminChatCommands;
+    private readonly Dictionary<string, AdminCommand>                          _adminChatCommands;
     private readonly InterfaceBridge                                           _bridge;
+
+    private readonly record struct AdminCommand(ImmutableArray<string> Permissions, ICommandManager.ClientCommandDelegate Handler);
 
     private readonly Dictionary<string, Func<StringCommand, ECommandAction>> _serverCommands;
 
@@ -84,16 +86,49 @@ internal class CommandManager : IManager, ICommandManager, IClientListener
             return callback(client.Slot, new (rawCommand, true, arguments));
         }
 
-        if (_adminChatCommands.TryGetValue(rawCommand, out callback))
+        if (_adminChatCommands.TryGetValue(rawCommand, out var admin))
         {
-#if DEBUG
-            return callback(client.Slot, new (rawCommand, true, arguments));
-#else
-            return ECommandAction.Handled;
-#endif
+            if (!HasAdminAccess(client, admin.Permissions))
+            {
+                client.Print(HudPrintChannel.Chat, "[Timer] You do not have access to this command.");
+                return ECommandAction.Handled;
+            }
+
+            return admin.Handler(client.Slot, new (rawCommand, true, arguments));
         }
 
         return ECommandAction.Skipped;
+    }
+
+    // Timer shipped admin commands that never invoked their handler in Release builds and ignored the
+    // permissions argument entirely. Resolve the caller against the framework AdminManager and enforce:
+    // empty permission set = any registered admin (mapper commands like zone/set_tier), a non-empty set =
+    // must hold at least one listed permission, and root ("*") always passes.
+    private bool HasAdminAccess(IGameClient client, ImmutableArray<string> permissions)
+    {
+        // ponytail: FindAdmin is [Obsolete] (forwards to AdminManager, removed at 2.2). Upgrade path when
+        // the KZ admin rework lands: resolve IAdminManager.GetAdmin via GetSharpModuleManager instead.
+#pragma warning disable CS0618
+        if (_bridge.ClientManager.FindAdmin(client.SteamId) is not { } admin)
+#pragma warning restore CS0618
+        {
+            return false;
+        }
+
+        if (permissions.IsDefaultOrEmpty || admin.HasPermission("*"))
+        {
+            return true;
+        }
+
+        foreach (var permission in permissions)
+        {
+            if (admin.HasPermission(permission))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void AddClientChatCommand(string command, ICommandManager.ClientCommandDelegate handler)
@@ -108,7 +143,7 @@ internal class CommandManager : IManager, ICommandManager, IClientListener
 
     public void AddAdminChatCommand(string command, ImmutableArray<string> permissions, ICommandManager.ClientCommandDelegate handler)
     {
-        if (_adminChatCommands.TryAdd(command, handler))
+        if (_adminChatCommands.TryAdd(command, new (permissions, handler)))
         {
             return;
         }
