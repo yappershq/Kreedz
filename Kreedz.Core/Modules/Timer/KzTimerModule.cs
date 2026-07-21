@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.GameEntities;
+using Sharp.Shared.HookParams;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
 using Kreedz.Shared.Interfaces.Listeners;
@@ -30,6 +31,12 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
     private readonly IKzStyleModule         _styleModule;
     private readonly ILogger<KzTimerModule> _logger;
 
+    // cs2kz KZTimerService::JustLanded — a run may not start within this window of touching the ground, so
+    // you can't perf-land into the start zone and instant-start. Tracked from our own per-tick ground state.
+    private const float LandingGrace = 0.05f;
+    private readonly bool[]  _wasGround    = new bool[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _lastLandTime = new float[PlayerSlot.MaxPlayerCount];
+
     public KzTimerModule(InterfaceBridge    bridge,
                          ITimerModule       timerModule,
                          ICheckpointModule  checkpointModule,
@@ -46,7 +53,24 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
     public bool Init()
     {
         _timerModule.RegisterListener(this);
+        _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         return true;
+    }
+
+    // Track the tick a player last touched ground, so CanStartTimer can enforce cs2kz's JustLanded grace.
+    private void OnProcessMovePre(IPlayerProcessMoveForwardParams arg)
+    {
+        var client = arg.Client;
+        if (!client.IsValid || client.IsFakeClient)
+            return;
+
+        var slot     = client.Slot;
+        var onGround = arg.Pawn.GroundEntityHandle.IsValid();
+
+        if (onGround && !_wasGround[slot])
+            _lastLandTime[slot] = _bridge.ModSharp.GetGlobals().CurTime;
+
+        _wasGround[slot] = onGround;
     }
 
     // Publish the public run-state service so external plugins (HUD/Global) can read timer+cp/tp state
@@ -55,7 +79,11 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
         => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzRunService>(
                _bridge.Entrypoint, IKzRunService.Identity, this);
 
-    public void Shutdown() => _timerModule.UnregisterListener(this);
+    public void Shutdown()
+    {
+        _timerModule.UnregisterListener(this);
+        _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+    }
 
     // ── IKzRunService ─────────────────────────────────────────────────────────
     public event Action<PlayerSlot, ITimerInfo, int, bool>? RunFinished;
@@ -63,12 +91,20 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
     int IKzRunService.GetTeleportCount(PlayerSlot slot)          => _checkpointModule.GetTeleportCount(slot);
     int IKzRunService.GetCheckpointCount(PlayerSlot slot)        => _checkpointModule.GetCheckpointCount(slot);
 
-    // Strict start-validation gate (cs2kz KZTimerService::TimerStart). The unambiguous checks that can
-    // never reject a legitimate run: the player must be alive and in normal (Walk) movement — so a run
-    // can't start while dead or noclipping. cs2kz's debounce checks (JustTeleported/JustLanded/inPerf/
-    // JustNoclipped/valid-jump) need per-tick movement state the timer will own — follow-up.
+    // Strict start-validation gate (cs2kz KZTimerService::TimerStart). Alive + Walk (can't start dead or
+    // noclipping) + the JustLanded grace (can't perf-land into the start zone and instant-start). Still a
+    // follow-up: JustTeleported (needs a teleport-time signal from the checkpoint module), inPerf, valid-jump.
     bool ITimerModuleListener.CanStartTimer(IPlayerController controller, IPlayerPawn pawn)
-        => pawn is { IsAlive: true, MoveType: MoveType.Walk };
+    {
+        if (pawn is not { IsAlive: true, MoveType: MoveType.Walk })
+            return false;
+
+        if (controller.GetGameClient() is { } client
+            && _bridge.ModSharp.GetGlobals().CurTime - _lastLandTime[client.Slot] < LandingGrace)
+            return false; // cs2kz JustLanded
+
+        return true;
+    }
 
     void ITimerModuleListener.OnPlayerTimerStart(IPlayerController controller, IPlayerPawn pawn, ITimerInfo timerInfo)
     {
