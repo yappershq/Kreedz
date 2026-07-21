@@ -13,4 +13,9 @@ internal sealed class PlayerEntity : BaseSteamIdSerialEntity
     public uint Points { get; set; }
     public uint Runs   { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>KZ per-player options blob (JSON), owned by the OptionModule preference store. Nullable
+    /// so CodeFirst adds it in-place on existing tables; unread until the OptionModule lands (P1+).</summary>
+    [SugarColumn(ColumnDataType = "text", IsNullable = true)]
+    public string? Preferences { get; set; }
 }
