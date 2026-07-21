@@ -194,6 +194,30 @@ language (i18n — do early), noclip. (`saveloc` in cs2kz is an empty stub — s
 
 ---
 
+## 7b. P1 data-model mapping (Timer entity → KZ schema — the concrete edits)
+
+Timer's entities (`Timer.RequestManager/Common/Entities/`) already model 90% of the KZ shape; P1 is a
+targeted redefine, NOT a rewrite. Exact deltas:
+
+| Timer entity | → KZ table | Edits for KZ parity |
+|---|---|---|
+| `MapEntity` | `Maps` | ~as-is (Id/Name/LastPlayed/Created). |
+| `MapTrackEntity` | `MapCourses` | rename track→course; add `StageID`; keep `MapID` FK. Timer's `Track` int already models multiple courses/bonuses. |
+| `PlayerEntity` | `Players` | add **`Preferences` TEXT** (KZ per-player options JSON — the OptionModule store); keep SteamID64 PK. |
+| `RunEntity` | `Times` | (1) **ID → UUIDv7 string** (Timer uses numeric); (2) add **`Teleports`** (→ Pro=0 / Standard≥1); (3) replace surf `Style` int with **`StyleIDFlags` bitmask** (0 = styleless = ranked); (4) add **`ModeID`** FK; (5) drop surf-only `Jumps/Strafes/Sync` + the 12 velocity floats (→ optional `Metadata` JSON). |
+| `RunSegmentEntity` | (per-split times) | keep for split/checkpoint/stage times. |
+| `PlayerBestRunEntity` | (materialized PB) | reuse; re-key by `(ModeID, MapCourseID, StyleIDFlags=0, Pro?)`. |
+| `ZoneEntity` | (KZ zones) | reuse; extend zone-type enum to KZ trigger types (§6). |
+| `ReplayEntity` | (replay URL) | reuse; link by run UUID. |
+| — (none) | **`Bans`** (NEW) | UUID Id, SteamID64 FK, Reason, ReplayUUID, ExpiresAt, Created — KZ needs it (anticheat + ranking exclusion `LEFT JOIN Bans … IS NULL`). No Timer equivalent. |
+| — (none) | **`Modes`** / **`Styles`** (NEW, optional) | id/name/shortname registries so runs FK a mode/style row (cs2kz shape). Can start as enums + add tables when external modes/styles land. |
+
+`IRequestManager` (`Timer.Shared/Interfaces/IRequestManager.cs`) surface stays the seam — `AddPlayerRecord`/
+`GetPlayerRecord`/`GetMapRecords` gain KZ params (mode, teleports, pro/standard); the LiteDB fallback +
+SqlSugar proxy get the same edits. Ranking queries add the styleless + ban-exclusion filters. **This is the
+first coding step (P1) and is fully decision-independent** — it's the same schema whether ranking is
+our-own or official later.
+
 ## 8. Open decisions (for prefix)
 1. **Official global vs our own ranking?** (caveat §2A) — recommend our-own now, official later if
    KZGlobalteam issues a key + accepts our mode checksums.
