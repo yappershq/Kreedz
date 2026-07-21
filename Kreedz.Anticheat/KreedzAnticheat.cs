@@ -24,6 +24,7 @@ using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
+using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 
 namespace Kreedz.Anticheat;
@@ -41,9 +42,17 @@ public sealed class KreedzAnticheat : IModSharpModule
     private readonly IConVar                 _autokick;
     private readonly IConVar?                _svCheats;
 
+    private const int NullsChain = 20; // clean counter-strafes in a row no human hits (cs2kz nulls detector)
+
     private readonly bool[]  _wasGround  = new bool[PlayerSlot.MaxPlayerCount];
     private readonly float[] _groundTime = new float[PlayerSlot.MaxPlayerCount];
     private readonly int[]   _perfChain  = new int[PlayerSlot.MaxPlayerCount];
+
+    // Nulls detector: a "null" script swaps strafe keys with zero overlap/deadair — a perfectly clean
+    // A↔D flip every tick. Humans pass through a both-pressed or neither-pressed tick. Count consecutive
+    // clean counter-strafes; an inhuman run of them = nulls. (Tick-resolution; cs2kz uses subtick timing.)
+    private readonly int[] _lastStrafeDir = new int[PlayerSlot.MaxPlayerCount]; // -1 left, +1 right, 0 none/both
+    private readonly int[] _nullsChain    = new int[PlayerSlot.MaxPlayerCount];
 
     public string DisplayName   => "[Kreedz] Anticheat";
     public string DisplayAuthor => "yappershq";
@@ -65,13 +74,47 @@ public sealed class KreedzAnticheat : IModSharpModule
     {
         _hookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _hookManager.PlayerRunCommand.InstallHookPost(OnRunCommandPost);
         return true;
+    }
+
+    // Nulls detector — inspect per-tick strafe buttons for inhumanly-clean counter-strafes.
+    private void OnRunCommandPost(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
+    {
+        var client = param.Client;
+        if (client.IsValid && !client.IsFakeClient && !(_svCheats?.GetBool() ?? false))
+        {
+            var slot = client.Slot;
+            var left  = param.KeyButtons.HasFlag(UserCommandButtons.MoveLeft);
+            var right = param.KeyButtons.HasFlag(UserCommandButtons.MoveRight);
+            var dir   = left == right ? 0 : (left ? -1 : 1); // both or neither = 0 (a human transition)
+
+            if (dir != 0)
+            {
+                // A clean counter-strafe: direction flipped between two ticks with no 0-tick between.
+                if (_lastStrafeDir[slot] != 0 && dir != _lastStrafeDir[slot])
+                {
+                    if (++_nullsChain[slot] >= NullsChain)
+                    {
+                        Flag(client, $"nulls ({_nullsChain[slot]} perfect counter-strafes in a row)");
+                        _nullsChain[slot] = 0;
+                    }
+                }
+                _lastStrafeDir[slot] = dir;
+            }
+            else
+            {
+                _nullsChain[slot]    = 0; // overlap/deadair — human imperfection, reset
+                _lastStrafeDir[slot] = 0;
+            }
+        }
     }
 
     public void Shutdown()
     {
         _hookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
         _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _hookManager.PlayerRunCommand.RemoveHookPost(OnRunCommandPost);
     }
 
     private void OnProcessMovePre(IPlayerProcessMoveForwardParams arg)
