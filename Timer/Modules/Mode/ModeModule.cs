@@ -47,15 +47,19 @@ internal sealed class ModeModule : IModule, IModeModule
 
     private readonly InterfaceBridge     _bridge;
     private readonly ICommandManager     _commandManager;
+    private readonly IPreferencesModule  _prefs;
     private readonly ILogger<ModeModule> _logger;
 
     private readonly Dictionary<string, IKzMode> _modes = new(System.StringComparer.OrdinalIgnoreCase);
     private readonly string[] _current = new string[PlayerSlot.MaxPlayerCount];
 
-    public ModeModule(InterfaceBridge bridge, ICommandManager commandManager, ILogger<ModeModule> logger)
+    private const string PrefKey = "mode";
+
+    public ModeModule(InterfaceBridge bridge, ICommandManager commandManager, IPreferencesModule prefs, ILogger<ModeModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
+        _prefs          = prefs;
         _logger         = logger;
 
         for (var i = 0; i < _current.Length; i++)
@@ -76,10 +80,25 @@ internal sealed class ModeModule : IModule, IModeModule
         _commandManager.AddClientChatCommand("mode", OnCommandMode);
 
         _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
+        _prefs.Loaded += OnPreferencesLoaded;
         return true;
     }
 
-    public void Shutdown() => _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+    public void Shutdown()
+    {
+        _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+        _prefs.Loaded -= OnPreferencesLoaded;
+    }
+
+    // Restore the player's saved mode once their preferences load (applies convars immediately).
+    private void OnPreferencesLoaded(PlayerSlot slot)
+    {
+        if (_prefs.Get(slot, PrefKey) is { } id && _modes.ContainsKey(id))
+        {
+            _current[slot] = id;
+            Reapply(slot);
+        }
+    }
 
     public string GetMode(PlayerSlot slot) => _current[slot];
 
@@ -120,6 +139,7 @@ internal sealed class ModeModule : IModule, IModeModule
         }
 
         _current[slot] = mode.Id;
+        _prefs.Set(slot, PrefKey, mode.Id);
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
         {
             Apply(client, mode);

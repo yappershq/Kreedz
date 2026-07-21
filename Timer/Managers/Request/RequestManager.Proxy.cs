@@ -245,4 +245,14 @@ internal sealed class RequestManagerProxy : IManager, IRequestManager
         => Current.GetActiveBanAsync(steamId);
 
     #endregion
+
+    #region Preferences
+
+    public Task<string?> GetPreferencesAsync(SteamID steamId)
+        => Current.GetPreferencesAsync(steamId);
+
+    public Task SavePreferencesAsync(SteamID steamId, string json)
+        => Current.SavePreferencesAsync(steamId, json);
+
+    #endregion
 }

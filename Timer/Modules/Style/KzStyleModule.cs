@@ -39,19 +39,23 @@ internal interface IKzStyle
 
 internal sealed class KzStyleModule : IModule, IKzStyleModule
 {
+    private const string PrefKey = "styles";
+
     private readonly InterfaceBridge        _bridge;
     private readonly ICommandManager        _commandManager;
     private readonly IModeModule            _modeModule;
+    private readonly IPreferencesModule     _prefs;
     private readonly ILogger<KzStyleModule> _logger;
 
     private readonly Dictionary<string, IKzStyle> _styles = new(System.StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string>[]            _active = new HashSet<string>[PlayerSlot.MaxPlayerCount];
 
-    public KzStyleModule(InterfaceBridge bridge, ICommandManager commandManager, IModeModule modeModule, ILogger<KzStyleModule> logger)
+    public KzStyleModule(InterfaceBridge bridge, ICommandManager commandManager, IModeModule modeModule, IPreferencesModule prefs, ILogger<KzStyleModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
         _modeModule     = modeModule;
+        _prefs          = prefs;
         _logger         = logger;
 
         for (var i = 0; i < _active.Length; i++)
@@ -73,10 +77,30 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
         _commandManager.AddClientChatCommand("addstyle",    (s, c) => { SetStyle(s, Arg(c), true);  return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("removestyle", (s, c) => { SetStyle(s, Arg(c), false); return ECommandAction.Handled; });
         _commandManager.AddClientChatCommand("clearstyles", (s, _) => { ClearStyles(s); return ECommandAction.Handled; });
+
+        _prefs.Loaded += OnPreferencesLoaded;
         return true;
     }
 
+    public void Shutdown() => _prefs.Loaded -= OnPreferencesLoaded;
+
     public bool HasAnyStyle(PlayerSlot slot) => _active[slot].Count > 0;
+
+    // Restore the player's saved style stack once preferences load (runs after ModeModule's restore, so
+    // the mode base is already correct when ReapplyAll layers the styles on top).
+    private void OnPreferencesLoaded(PlayerSlot slot)
+    {
+        if (_prefs.Get(slot, PrefKey) is not { Length: > 0 } raw) return;
+
+        _active[slot].Clear();
+        foreach (var id in raw.Split(',', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries))
+            if (_styles.ContainsKey(id))
+                _active[slot].Add(id);
+
+        ReapplyAll(slot);
+    }
+
+    private void Persist(PlayerSlot slot) => _prefs.Set(slot, PrefKey, string.Join(',', _active[slot]));
 
     private void Register(IKzStyle style)
     {
@@ -109,6 +133,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
         if (enable) _active[slot].Add(style.Id);
         else        _active[slot].Remove(style.Id);
 
+        Persist(slot);
         ReapplyAll(slot);
         Tell(slot, enable ? $"Style {style.Name} enabled." : $"Style {style.Name} disabled.");
     }
@@ -116,6 +141,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule
     private void ClearStyles(PlayerSlot slot)
     {
         _active[slot].Clear();
+        Persist(slot);
         ReapplyAll(slot);
         Tell(slot, "Styles cleared.");
     }

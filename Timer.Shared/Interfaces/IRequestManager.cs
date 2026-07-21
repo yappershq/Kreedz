@@ -135,6 +135,16 @@ public interface IRequestManager
 
 #endregion
 
+#region Preferences
+
+    /// <summary>The player's persisted preferences blob (opaque JSON owned by the caller), or null if none.</summary>
+    Task<string?> GetPreferencesAsync(SteamID steamId);
+
+    /// <summary>Persist the player's preferences blob. No-op if the player row does not exist yet.</summary>
+    Task SavePreferencesAsync(SteamID steamId, string json);
+
+#endregion
+
     Task<PlayerProfile> GetPlayerProfile(SteamID steamId, string name);
 
     /// <summary>

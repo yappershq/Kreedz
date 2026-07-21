@@ -48,6 +48,13 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
     private const string UserTableName = "users";
     private const string ZoneTableName = "zones";
     private const string BanTableName  = "kz_bans";
+    private const string PreferencesTableName = "kz_preferences";
+
+    private sealed class PrefDoc
+    {
+        public ulong  SteamId { get; set; }
+        public string Json    { get; set; } = string.Empty;
+    }
 
     static RequestManagerLiteDB()
     {
@@ -118,6 +125,28 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
 
         var banCol = Database.GetCollection<BanRecord>(BanTableName);
         banCol.EnsureIndex(x => x.SteamId);
+
+        var prefCol = Database.GetCollection<PrefDoc>(PreferencesTableName);
+        prefCol.EnsureIndex(x => x.SteamId);
+    }
+
+    public Task<string?> GetPreferencesAsync(SteamID steamId)
+    {
+        var value = steamId.AsPrimitive();
+        var doc   = Database.GetCollection<PrefDoc>(PreferencesTableName).FindOne(p => p.SteamId == value);
+
+        return Task.FromResult(doc?.Json);
+    }
+
+    public Task SavePreferencesAsync(SteamID steamId, string json)
+    {
+        var value = steamId.AsPrimitive();
+        var col   = Database.GetCollection<PrefDoc>(PreferencesTableName);
+
+        col.DeleteMany(p => p.SteamId == value); // dedup by steamid (auto _id otherwise)
+        col.Insert(new PrefDoc { SteamId = value, Json = json });
+
+        return Task.CompletedTask;
     }
 
     public Task AddBanAsync(SteamID steamId, string? reason, DateTime expiresAt)

@@ -2,8 +2,8 @@
  * yappershq/Timer (KZ) — CS2KZ port
  *
  * KZ `!fov <value>` — custom field-of-view (1:1 cs2kz src/kz/fov), clamped to [MinFov, MaxFov] and
- * re-applied on spawn (the game resets DesiredFOV each spawn). Persisted per-player in memory for now;
- * moves into the OptionModule preference store when that lands.
+ * re-applied on spawn (the game resets DesiredFOV each spawn). Persisted per-player via the preference
+ * store, so a player's FOV survives a reconnect.
  */
 
 using System;
@@ -24,16 +24,20 @@ internal sealed class FovModule : IModule, IFovModule
     private const uint MinFov     = 40;
     private const uint MaxFov     = 150;
 
+    private const string PrefKey = "fov";
+
     private readonly InterfaceBridge    _bridge;
     private readonly ICommandManager    _commandManager;
+    private readonly IPreferencesModule _prefs;
     private readonly ILogger<FovModule> _logger;
 
     private readonly uint[] _fov = new uint[PlayerSlot.MaxPlayerCount];
 
-    public FovModule(InterfaceBridge bridge, ICommandManager commandManager, ILogger<FovModule> logger)
+    public FovModule(InterfaceBridge bridge, ICommandManager commandManager, IPreferencesModule prefs, ILogger<FovModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
+        _prefs          = prefs;
         _logger         = logger;
 
         for (var i = 0; i < _fov.Length; i++)
@@ -44,10 +48,24 @@ internal sealed class FovModule : IModule, IFovModule
     {
         _commandManager.AddClientChatCommand("fov", OnCommandFov);
         _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
+        _prefs.Loaded += OnPreferencesLoaded;
         return true;
     }
 
-    public void Shutdown() => _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+    public void Shutdown()
+    {
+        _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+        _prefs.Loaded -= OnPreferencesLoaded;
+    }
+
+    private void OnPreferencesLoaded(PlayerSlot slot)
+    {
+        if (_prefs.Get(slot, PrefKey) is { } raw && uint.TryParse(raw, out var value))
+        {
+            _fov[slot] = Math.Clamp(value, MinFov, MaxFov);
+            Apply(slot);
+        }
+    }
 
     private ECommandAction OnCommandFov(PlayerSlot slot, StringCommand command)
     {
@@ -58,6 +76,7 @@ internal sealed class FovModule : IModule, IFovModule
         }
 
         _fov[slot] = Math.Clamp(requested, MinFov, MaxFov);
+        _prefs.Set(slot, PrefKey, _fov[slot].ToString());
         Apply(slot);
         Tell(slot, $"FOV set to {_fov[slot]}.");
         return ECommandAction.Handled;
