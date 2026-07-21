@@ -84,6 +84,7 @@ internal sealed class KzHudModule : IModule, IHudModule
         var speed = (int) MathF.Round(pawn.GetAbsVelocity().Length2D());
         var keys  = Keys(param.KeyButtons);
         var tp    = _checkpoint.GetTeleportCount(slot);
+        var cp    = _checkpoint.GetCheckpointCount(slot);
         var mode  = _mode.GetMode(slot).ToUpperInvariant();
 
         // Run timer line — only while a run is active (Running/Paused); hidden when stopped.
@@ -97,7 +98,7 @@ internal sealed class KzHudModule : IModule, IHudModule
         var html = timeLine +
                    $"<font class='fontSize-l' color='#8effc1'>{speed}</font> <font class='fontSize-m' color='#c0cbd8'>u/s</font><br>" +
                    $"<font class='fontSize-m' color='#9fb0c8'>{keys}</font><br>" +
-                   $"<font class='fontSize-s' color='#7f8fa6'>{mode} · TP {tp}</font>";
+                   $"<font class='fontSize-s' color='#7f8fa6'>{mode} · CP {cp} · TP {tp}</font>";
 
         _hudEvent.SetString("loc_token", html);
         _hudEvent.FireToClient(client);

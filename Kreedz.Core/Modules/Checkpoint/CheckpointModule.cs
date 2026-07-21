@@ -23,6 +23,9 @@ internal interface ICheckpointModule
     /// <summary>Teleports used this run (≥1 → the run is Standard, not Pro).</summary>
     int GetTeleportCount(PlayerSlot slot);
 
+    /// <summary>Number of checkpoints the player currently has saved.</summary>
+    int GetCheckpointCount(PlayerSlot slot);
+
     /// <summary>Clear a player's checkpoints + teleport counter (call on respawn / map change).</summary>
     void ResetCheckpoints(PlayerSlot slot);
 
@@ -79,6 +82,8 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     // ── ICheckpointModule ──────────────────────────────────────────────────
 
     public int GetTeleportCount(PlayerSlot slot) => _tpCount[slot];
+
+    public int GetCheckpointCount(PlayerSlot slot) => _checkpoints[slot]?.Count ?? 0;
 
     public void ResetCheckpoints(PlayerSlot slot)
     {
