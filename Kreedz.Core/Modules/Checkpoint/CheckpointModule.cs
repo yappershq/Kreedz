@@ -31,6 +31,9 @@ internal interface ICheckpointModule
 
     /// <summary>Reset only the teleport counter, keeping the checkpoint stack (a fresh run starts Pro).</summary>
     void ResetTeleportCount(PlayerSlot slot);
+
+    /// <summary>Server curtime of the player's last cp/tp teleport — for the timer's JustTeleported gate.</summary>
+    float GetLastTeleportTime(PlayerSlot slot);
 }
 
 internal sealed class CheckpointModule : IModule, ICheckpointModule
@@ -42,7 +45,8 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     private readonly List<Checkpoint>[] _checkpoints = new List<Checkpoint>[PlayerSlot.MaxPlayerCount];
     private readonly int[]              _cpIndex     = new int[PlayerSlot.MaxPlayerCount];
     private readonly int[]              _tpCount     = new int[PlayerSlot.MaxPlayerCount];
-    private readonly Checkpoint?[]      _startPos    = new Checkpoint?[PlayerSlot.MaxPlayerCount];
+    private readonly Checkpoint?[]      _startPos         = new Checkpoint?[PlayerSlot.MaxPlayerCount];
+    private readonly float[]            _lastTeleportTime = new float[PlayerSlot.MaxPlayerCount];
 
     public CheckpointModule(InterfaceBridge bridge, ICommandManager commandManager, ILogger<CheckpointModule> logger)
     {
@@ -82,6 +86,8 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     // ── ICheckpointModule ──────────────────────────────────────────────────
 
     public int GetTeleportCount(PlayerSlot slot) => _tpCount[slot];
+
+    public float GetLastTeleportTime(PlayerSlot slot) => _lastTeleportTime[slot];
 
     public int GetCheckpointCount(PlayerSlot slot) => _checkpoints[slot]?.Count ?? 0;
 
@@ -165,6 +171,7 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
         if (GetAlivePawn(slot) is not { } pawn) return;
         pawn.Teleport(cp.Origin, cp.Angles, new Vector()); // KZ teleport lands you standing (zero velocity)
         _tpCount[slot]++;
+        _lastTeleportTime[slot] = _bridge.ModSharp.GetGlobals().CurTime; // cs2kz lastTeleportTime — JustTeleported gate
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

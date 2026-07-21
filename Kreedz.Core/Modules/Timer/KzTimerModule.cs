@@ -33,7 +33,8 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
 
     // cs2kz KZTimerService::JustLanded — a run may not start within this window of touching the ground, so
     // you can't perf-land into the start zone and instant-start. Tracked from our own per-tick ground state.
-    private const float LandingGrace = 0.05f;
+    private const float LandingGrace   = 0.05f; // KZ_TIMER_MIN_GROUND_TIME
+    private const float RecentTeleport = 0.05f; // KZ_RECENT_TELEPORT_THRESHOLD
     private readonly bool[]  _wasGround    = new bool[PlayerSlot.MaxPlayerCount];
     private readonly float[] _lastLandTime = new float[PlayerSlot.MaxPlayerCount];
 
@@ -91,17 +92,20 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
     int IKzRunService.GetTeleportCount(PlayerSlot slot)          => _checkpointModule.GetTeleportCount(slot);
     int IKzRunService.GetCheckpointCount(PlayerSlot slot)        => _checkpointModule.GetCheckpointCount(slot);
 
-    // Strict start-validation gate (cs2kz KZTimerService::TimerStart). Alive + Walk (can't start dead or
-    // noclipping) + the JustLanded grace (can't perf-land into the start zone and instant-start). Still a
-    // follow-up: JustTeleported (needs a teleport-time signal from the checkpoint module), inPerf, valid-jump.
+    // Strict start-validation gate (cs2kz KZTimerService::TimerStart): alive + Walk (no start while dead or
+    // noclipping) + JustLanded (can't perf-land into the start zone and instant-start) + JustTeleported
+    // (can't cp/tp into the start and instant-start). Still follow-ups: inPerf, valid-jump (airborne start).
     bool ITimerModuleListener.CanStartTimer(IPlayerController controller, IPlayerPawn pawn)
     {
         if (pawn is not { IsAlive: true, MoveType: MoveType.Walk })
             return false;
 
-        if (controller.GetGameClient() is { } client
-            && _bridge.ModSharp.GetGlobals().CurTime - _lastLandTime[client.Slot] < LandingGrace)
-            return false; // cs2kz JustLanded
+        if (controller.GetGameClient() is { } client)
+        {
+            var now = _bridge.ModSharp.GetGlobals().CurTime;
+            if (now - _lastLandTime[client.Slot] < LandingGrace)                              return false; // JustLanded
+            if (now - _checkpointModule.GetLastTeleportTime(client.Slot) < RecentTeleport)    return false; // JustTeleported
+        }
 
         return true;
     }
