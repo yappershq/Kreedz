@@ -24,8 +24,9 @@ using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Jumpstats;
 
-// cs2kz JumpType (the classifiable subset from managed per-tick data).
-public enum JumpType { LongJump, Bhop, MultiBhop, WeirdJump, LadderJump, Ladderhop, Fall, Other }
+// cs2kz JumpType (kz_jumpstats.h) — order matches cs2kz so it indexes the tier tables directly.
+// Jumpbug is present for enum-parity but not yet produced by Classify (needs native duckbug detection).
+public enum JumpType { LongJump, Bhop, MultiBhop, WeirdJump, LadderJump, Ladderhop, Jumpbug, Fall, Other }
 
 public enum DistanceTier { None, Meh, Impressive, Perfect, Godlike, Ownage, Wrecker }
 
@@ -33,7 +34,6 @@ public sealed class KreedzJumpstats : IModSharpModule
 {
     private const float OffsetUnits = 32f;   // KZ block offset added to raw horizontal distance
     private const int   PerfTicks   = 2;     // ground ticks <= this before takeoff -> bhop (perf-ish)
-    private const float MinTierDist = 217f;  // below the Meh threshold -> not announced
 
     private readonly ISharedSystem            _shared;
     private readonly IHookManager             _hookManager;
@@ -41,6 +41,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly ILogger<KreedzJumpstats> _logger;
 
     private IKzStyleRegistry? _styles;
+    private IKzModeRegistry?  _mode;    // resolved cross-plugin to pick the per-mode tier table
     private IRequestManager?  _request; // resolved cross-plugin for jump persistence
 
     private readonly bool[]     _wasOnGround = new bool[PlayerSlot.MaxPlayerCount];
@@ -87,6 +88,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     {
         var mgr = _shared.GetSharpModuleManager();
         _styles  = mgr.GetOptionalSharpModuleInterface<IKzStyleRegistry>(IKzStyleRegistry.Identity)?.Instance;
+        _mode    = mgr.GetOptionalSharpModuleInterface<IKzModeRegistry>(IKzModeRegistry.Identity)?.Instance;
         _request = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
     }
 
@@ -153,7 +155,7 @@ public sealed class KreedzJumpstats : IModSharpModule
             var dy   = origin.Y - _takeoff[slot].Y;
             var dist = MathF.Sqrt(dx * dx + dy * dy) + OffsetUnits;
 
-            if (dist >= MinTierDist && _styles?.HasAnyStyle(slot) != true) // styled runs don't count (1:1)
+            if (_styles?.HasAnyStyle(slot) != true) // styled runs don't count (1:1); GetTier gates the distance
                 Report(slot, _type[slot], dist);
         }
 
@@ -189,6 +191,7 @@ public sealed class KreedzJumpstats : IModSharpModule
         JumpType.WeirdJump  => "WJ",
         JumpType.LadderJump => "LAJ",
         JumpType.Ladderhop  => "LAH",
+        JumpType.Jumpbug    => "JB",
         _                   => "JUMP",
     };
 
@@ -196,7 +199,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     {
         if (type is JumpType.Fall or JumpType.Other) return; // not a scored jump
 
-        var tier = Tier(distance);
+        var tier = GetTier(slot, type, distance);
         if (tier == DistanceTier.None) return;
 
         var label   = Label(type);
@@ -228,15 +231,45 @@ public sealed class KreedzJumpstats : IModSharpModule
         return a;
     }
 
-    // VNL/CKZ LongJump tier thresholds (ascending). Full per-mode/per-type tables land with the port.
-    private static DistanceTier Tier(float d) => d switch
+    // cs2kz per-mode, per-jump-type distance-tier tables (kz_mode_ckz.h / kz_mode_vnl.h). Rows index by
+    // JumpType (LongJump..Jumpbug = 0..6); 6 columns = the Meh/Impressive/Perfect/Godlike/Ownage/Wrecker
+    // ascending thresholds. Replaces the old single LongJump-only table applied to every jump type + mode.
+    private static readonly float[][] CkzTiers =
+    [
+        [217f, 265f, 270f, 275f, 280f, 284f], // LongJump
+        [217f, 275f, 280f, 287f, 292f, 295f], // Bhop
+        [217f, 275f, 280f, 287f, 292f, 295f], // MultiBhop
+        [217f, 275f, 280f, 287f, 292f, 295f], // WeirdJump
+        [120f, 160f, 170f, 180f, 190f, 200f], // LadderJump
+        [217f, 260f, 265f, 270f, 275f, 278f], // Ladderhop
+        [217f, 275f, 280f, 287f, 292f, 295f], // Jumpbug
+    ];
+
+    private static readonly float[][] VnlTiers =
+    [
+        [215f, 230f, 235f, 240f, 245f, 248f], // LongJump
+        [150f, 230f, 233f, 238f, 240f, 242f], // Bhop
+        [150f, 232f, 237f, 242f, 245f, 248f], // MultiBhop
+        [150f, 230f, 235f, 240f, 244f, 246f], // WeirdJump
+        [ 50f,  80f,  90f, 100f, 105f, 108f], // LadderJump
+        [215f, 250f, 253f, 258f, 261f, 263f], // Ladderhop
+        [215f, 255f, 260f, 265f, 270f, 272f], // Jumpbug
+    ];
+
+    // cs2kz KZ<mode>ModeService::GetDistanceTier: pick the active mode's table, index by jump type, return
+    // the highest tier the distance beats. Non-scored types (Fall/Other) and distance > 500u → None.
+    private DistanceTier GetTier(PlayerSlot slot, JumpType type, float distance)
     {
-        >= 284f => DistanceTier.Wrecker,
-        >= 280f => DistanceTier.Ownage,
-        >= 275f => DistanceTier.Godlike,
-        >= 270f => DistanceTier.Perfect,
-        >= 265f => DistanceTier.Impressive,
-        >= 217f => DistanceTier.Meh,
-        _       => DistanceTier.None,
-    };
+        var row = (int) type;
+        if (type is JumpType.Fall or JumpType.Other || row > (int) JumpType.Jumpbug || distance > 500f)
+            return DistanceTier.None;
+
+        var isVnl = string.Equals(_mode?.GetPlayerMode(slot), "vnl", StringComparison.OrdinalIgnoreCase);
+        var tiers = (isVnl ? VnlTiers : CkzTiers)[row];
+
+        var tier = DistanceTier.None;
+        while ((int) tier < tiers.Length && distance >= tiers[(int) tier])
+            tier = (DistanceTier) ((int) tier + 1);
+        return tier;
+    }
 }
