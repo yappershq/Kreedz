@@ -134,6 +134,9 @@ internal class InterfaceBridge
     public ILoggerFactory        LoggerFactory        { get; }
     public ILibraryModuleManager LibraryModuleManager { get; }
 
+    /// <summary>Localization (cross-plugin, optional). Resolved in OnAllModulesLoaded; null = text is silent.</summary>
+    public Sharp.Modules.LocalizerManager.Shared.ILocalizerManager? LocalizerManager { get; set; }
+
     public IGameRules     GameRules  => ModSharp.GetGameRules();
     public IGlobalVars    GlobalVars => ModSharp.GetGlobals();
     public INetworkServer Server     => ModSharp.GetIServer();

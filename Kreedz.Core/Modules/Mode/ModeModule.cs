@@ -116,7 +116,7 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
         }
 
         var names = _modes.Count == 0 ? "(none installed)" : string.Join(", ", _modes.Values.Select(m => m.ShortName));
-        Tell(slot, $"Current mode: {ModeName(_current[slot])}. Available: {names}. Use !mode <name>.");
+        Msg(slot, "Kreedz_Mode_Current", ModeName(_current[slot]), names);
         return ECommandAction.Handled;
     }
 
@@ -124,7 +124,7 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
     {
         if (!_modes.TryGetValue(id, out var mode))
         {
-            Tell(slot, $"Unknown mode '{id}'.");
+            Msg(slot, "Kreedz_Mode_Unknown", id);
             return;
         }
 
@@ -135,7 +135,7 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
         {
             Apply(client, mode);
-            Tell(slot, $"Mode set to {mode.Name}.");
+            Msg(slot, "Kreedz_Mode_Set", mode.Name);
         }
     }
 
@@ -164,9 +164,9 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
 
     private string ModeName(string id) => _modes.TryGetValue(id, out var m) ? m.Name : id;
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }

@@ -206,6 +206,28 @@ public class Kreedz : IModSharpModule
         RefreshRequestManager();
         RefreshCommandManager();
         RefreshReplayProvider();
+        ResolveLocalizer();
+    }
+
+    private void ResolveLocalizer()
+    {
+        var lm = _bridge.SharpModuleManager
+                        .GetOptionalSharpModuleInterface<Sharp.Modules.LocalizerManager.Shared.ILocalizerManager>(
+                            Sharp.Modules.LocalizerManager.Shared.ILocalizerManager.Identity)?.Instance;
+
+        _bridge.LocalizerManager = lm;
+
+        if (lm is null)
+        {
+            _logger.LogInformation("[Kreedz] ILocalizerManager not available — user-facing text will be silent.");
+            return;
+        }
+
+        var localesPath = System.IO.Path.Combine(_bridge.SharpPath, "locales");
+        if (!System.IO.Directory.Exists(localesPath)) return;
+
+        foreach (var file in System.IO.Directory.GetFiles(localesPath, "kreedz*.json"))
+            lm.LoadLocaleFile(System.IO.Path.GetFileNameWithoutExtension(file));
     }
 
     public void Shutdown()
