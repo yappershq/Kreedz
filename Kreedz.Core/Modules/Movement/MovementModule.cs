@@ -15,17 +15,21 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Sharp.Shared.Enums;
 using Sharp.Shared.Hooks;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Objects;
+using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Modules;
 
-internal sealed unsafe class MovementModule : IModule
+internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
 {
     private const string Ns = "CCSPlayer_MovementServices::";
 
@@ -35,14 +39,35 @@ internal sealed unsafe class MovementModule : IModule
     private readonly List<IRuntimeNativeHook> _hooks = [];
 
     private static MovementModule? _self;
-    private static nint _tAirMove, _tCategorize, _tTryPlayerMove;
+    private static nint _tAirMove, _tCategorize, _tTryPlayerMove, _tAirAccelerate;
 
     // {native movement-service* -> slot}, filled from PlayerProcessMovePre (which has pawn+slot), so the raw
     // detours can resolve the player; the active movement mode is cached per slot for the same tick.
     private readonly Dictionary<nint, PlayerSlot> _slotByMs   = new();
     private readonly IKzMovementMode?[]           _modeBySlot = new IKzMovementMode?[PlayerSlot.MaxPlayerCount];
 
+    // Per-tick state the AirAccelerate detour can't cheaply read itself: held buttons + last/prev eye-yaw
+    // (cs2kz reads m_nButtons/oldAngles for its AACall). Cached once per tick in PlayerProcessMovePre.
+    private readonly UserCommandButtons[] _buttons = new UserCommandButtons[PlayerSlot.MaxPlayerCount];
+    private readonly float[]              _prevYaw = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[]              _lastYaw = new float[PlayerSlot.MaxPlayerCount];
+
+    /// <summary>cs2kz AACall telemetry — raised once per AirAccelerate call (see <see cref="IKzMovementTelemetry"/>).</summary>
+    public event Action<PlayerSlot, AaCall>? AirAccelerate;
+
     private IConVar? _enabled;
+
+    // CMoveData raw-offset reads the managed MoveData struct doesn't expose. Offsets derived from cs2kz's
+    // hardcoded CMoveData layout, anchored to the managed struct's known m_flMaxSpeed = Win 0x120:
+    //   m_vecFrameVelocityDelta = the Vector immediately before m_flMaxSpeed → Win 0x114 (shifts -4 on Linux).
+    //   m_flSubtickStartFraction/EndFraction sit before the Windows-only 0xe4 pad → same offset both platforms.
+    private static readonly nint PlatformOffset = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? -4 : 0;
+    private const float EngineFixedTickInterval = 0.015625f; // 1/64 — cs2kz ENGINE_FIXED_TICK_INTERVAL
+
+    private static ref MoveData Move(nint mv)          => ref Unsafe.AsRef<MoveData>((void*)mv);
+    private static Vector      FrameVelocityDelta(nint mv) => *(Vector*)(mv + 0x114 + PlatformOffset);
+    private static float       SubtickStart(nint mv)   => *(float*)(mv + 0xdc);
+    private static float       SubtickEnd(nint mv)      => *(float*)(mv + 0xe0);
 
     public MovementModule(InterfaceBridge bridge, IModeModule modes, ILogger<MovementModule> logger)
     {
@@ -72,14 +97,21 @@ internal sealed unsafe class MovementModule : IModule
             _tAirMove       = Hook("AirMove",            (nint)(delegate* unmanaged<nint, nint, void>)&Hk_AirMove);
             _tCategorize    = Hook("CategorizePosition", (nint)(delegate* unmanaged<nint, nint, byte, void>)&Hk_CategorizePosition);
             _tTryPlayerMove = Hook("TryPlayerMove",      (nint)(delegate* unmanaged<nint, nint, nint, nint, nint, void>)&Hk_TryPlayerMove);
+            _tAirAccelerate = Hook("AirAccelerate",      (nint)(delegate* unmanaged<nint, nint, nint, float, float, void>)&Hk_AirAccelerate);
             _self = this;
-            _logger.LogInformation("[KZ.Movement] native detours installed (AirMove/CategorizePosition/TryPlayerMove).");
+            _logger.LogInformation("[KZ.Movement] native detours installed (AirMove/CategorizePosition/TryPlayerMove/AirAccelerate).");
         }
         catch (Exception e)
         {
             _logger.LogError(e, "[KZ.Movement] native detours unavailable (gamedata/sig failure) — modes run stock movement. Set kz_native_movement 0 to silence.");
         }
     }
+
+    // Publish the AACall telemetry stream so external plugins (Kreedz.Jumpstats) can subscribe in their
+    // OnAllSharpModulesLoaded — same publish-in-PostInit contract as the mode/style/run registries.
+    public void OnPostInit(ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzMovementTelemetry>(
+            _bridge.Entrypoint, IKzMovementTelemetry.Identity, this);
 
     public void Shutdown()
     {
@@ -103,6 +135,12 @@ internal sealed unsafe class MovementModule : IModule
         var slot = client.Slot;
         _slotByMs[ms.GetAbsPtr()] = slot;
         _modeBySlot[slot]         = _modes.GetMovementMode(slot);
+
+        // Snapshot the tick's AACall inputs (buttons + prev/this eye-yaw) for the AirAccelerate detour, which
+        // fires mid-ProcessMovement with only ms/mv. prevYaw = last tick's eye-yaw (cs2kz oldAngles.y).
+        _buttons[slot] = arg.Service.KeyButtons;
+        _prevYaw[slot] = _lastYaw[slot];
+        _lastYaw[slot] = arg.Pawn.GetEyeAngles().Y;
     }
 
     private static (PlayerSlot Slot, IKzMovementMode? Mode) Resolve(nint ms)
@@ -134,6 +172,35 @@ internal sealed unsafe class MovementModule : IModule
         mode?.OnTryPlayerMovePre(slot, ms, mv);
         ((delegate* unmanaged<nint, nint, nint, nint, nint, void>)_tTryPlayerMove)(ms, mv, firstDest, firstTrace, blocked);
         mode?.OnTryPlayerMovePost(slot, ms, mv);
+    }
+
+    // cs2kz splits AACall capture across pre (velocityPre/buttons) and post (velocityPost/wishdir/duration).
+    // We fold both around the single trampoline call: read velocity before, run the engine air-accel, then read
+    // velocity + m_vecFrameVelocityDelta after (CS2 air-accel routes most of its impulse through that delta, so
+    // velocityPost without it would equal velocityPre and every call would misclassify as badAngles).
+    [UnmanagedCallersOnly]
+    private static void Hk_AirAccelerate(nint ms, nint mv, nint pWishdir, float wishspeed, float accel)
+    {
+        var velPre = Move(mv).Velocity;
+        ((delegate* unmanaged<nint, nint, nint, float, float, void>)_tAirAccelerate)(ms, mv, pWishdir, wishspeed, accel);
+
+        var self = _self;
+        var handler = self?.AirAccelerate;
+        if (self is null || handler is null || !self._slotByMs.TryGetValue(ms, out var slot))
+            return;
+
+        ref var md      = ref Move(mv);
+        var velPost     = md.Velocity + FrameVelocityDelta(mv);
+        var duration    = MathF.Max(SubtickEnd(mv) - SubtickStart(mv), 0f) * EngineFixedTickInterval;
+        handler.Invoke(slot, new AaCall(
+            Wishdir:      *(Vector*)pWishdir,
+            WishSpeed:    wishspeed,
+            VelocityPre:  velPre,
+            VelocityPost: velPost,
+            Buttons:      self._buttons[slot],
+            Duration:     duration,
+            PrevYaw:      self._prevYaw[slot],
+            CurrentYaw:   md.ViewAngles.Y));
     }
 
     private nint Hook(string name, nint hookFn)

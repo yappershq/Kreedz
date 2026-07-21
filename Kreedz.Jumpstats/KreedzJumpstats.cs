@@ -6,12 +6,14 @@
  * install or omit it.
  *
  * Detects takeoffs/landings on the per-tick movement hook, computes jump distance, classifies LongJump
- * vs Bhop, and reports distance + tier (Meh→Wrecker). The full 1:1 stat set (sync/strafes/badAngles/
- * overlap/edge/block, per-mode tier tables, strict validation) needs the native movement AACall telemetry
- * — it layers on once the CKZ movement detours carry physics (they're pass-through today).
+ * vs Bhop, and reports distance + tier (Meh→Wrecker) + per-mode tier tables. The angle stats (sync/
+ * badAngles/overlap/deadAir/width) come bit-exact from the Core AACall telemetry (IKzMovementTelemetry,
+ * fed by the AirAccelerate detour) via the cs2kz Strafe::End classification, with a per-tick fallback when
+ * that telemetry is absent. Still open: edge/block, gain-efficiency % (needs per-call accel), strict validation.
  */
 
 using System;
+using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
@@ -40,9 +42,22 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly IClientManager           _clientManager;
     private readonly ILogger<KreedzJumpstats> _logger;
 
-    private IKzStyleRegistry? _styles;
-    private IKzModeRegistry?  _mode;    // resolved cross-plugin to pick the per-mode tier table
-    private IRequestManager?  _request; // resolved cross-plugin for jump persistence
+    private const float JsEpsilon = 0.03125f; // cs2kz JS_EPSILON
+
+    private IKzStyleRegistry?     _styles;
+    private IKzModeRegistry?      _mode;      // resolved cross-plugin to pick the per-mode tier table
+    private IRequestManager?      _request;   // resolved cross-plugin for jump persistence
+    private IKzMovementTelemetry? _telemetry; // Core AACall stream — bit-exact badAngles/sync/gain/width
+
+    // Per-jump AACall buffer (cs2kz Jump::strafes[].aaCalls). Filled from the Core AirAccelerate detour while a
+    // tracked jump is airborne; cleared on takeoff; drained on landing into the exact cs2kz Strafe::End stats.
+    private readonly List<AaCall>[] _aaCalls = BuildBuffers();
+    private static List<AaCall>[] BuildBuffers()
+    {
+        var a = new List<AaCall>[PlayerSlot.MaxPlayerCount];
+        for (var i = 0; i < a.Length; i++) a[i] = new List<AaCall>(64);
+        return a;
+    }
 
     private readonly bool[]     _wasOnGround = new bool[PlayerSlot.MaxPlayerCount];
     private readonly int[]      _groundTicks = new int[PlayerSlot.MaxPlayerCount];
@@ -90,12 +105,25 @@ public sealed class KreedzJumpstats : IModSharpModule
     public void OnAllModulesLoaded()
     {
         var mgr = _shared.GetSharpModuleManager();
-        _styles  = mgr.GetOptionalSharpModuleInterface<IKzStyleRegistry>(IKzStyleRegistry.Identity)?.Instance;
-        _mode    = mgr.GetOptionalSharpModuleInterface<IKzModeRegistry>(IKzModeRegistry.Identity)?.Instance;
-        _request = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
+        _styles    = mgr.GetOptionalSharpModuleInterface<IKzStyleRegistry>(IKzStyleRegistry.Identity)?.Instance;
+        _mode      = mgr.GetOptionalSharpModuleInterface<IKzModeRegistry>(IKzModeRegistry.Identity)?.Instance;
+        _request   = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
+        _telemetry = mgr.GetOptionalSharpModuleInterface<IKzMovementTelemetry>(IKzMovementTelemetry.Identity)?.Instance;
+        if (_telemetry is { } t) t.AirAccelerate += OnAirAccelerate;
     }
 
-    public void Shutdown() => _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+    public void Shutdown()
+    {
+        _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        if (_telemetry is { } t) t.AirAccelerate -= OnAirAccelerate;
+    }
+
+    // Buffer each AACall while a tracked jump is airborne (cs2kz records them in the active Strafe). Fires on
+    // the game thread inside the Core AirAccelerate detour — same thread as OnProcessMovePre, no locking needed.
+    private void OnAirAccelerate(PlayerSlot slot, AaCall call)
+    {
+        if (_tracking[slot]) _aaCalls[slot].Add(call);
+    }
 
     private void OnProcessMovePre(IPlayerProcessMoveForwardParams arg)
     {
@@ -135,6 +163,7 @@ public sealed class KreedzJumpstats : IModSharpModule
             _overlapTicks[slot]  = 0;
             _deadairTicks[slot]  = 0;
             _width[slot]         = 0f;
+            _aaCalls[slot].Clear();
         }
         else if (!onGround && _tracking[slot])
         {
@@ -218,18 +247,25 @@ public sealed class KreedzJumpstats : IModSharpModule
         var tier = GetTier(slot, type, distance);
         if (tier == DistanceTier.None) return;
 
-        var label   = Label(type);
-        var sync    = _airTicks[slot] > 0 ? 100f * _gainTicks[slot] / _airTicks[slot] : 0f;
-        var gain    = _maxSpeed[slot] - _takeoffSpeed[slot];
-        var overlap = _airTicks[slot] > 0 ? 100f * _overlapTicks[slot] / _airTicks[slot] : 0f;
-        var deadair = _airTicks[slot] > 0 ? 100f * _deadairTicks[slot] / _airTicks[slot] : 0f;
+        var label = Label(type);
+        var gain  = _maxSpeed[slot] - _takeoffSpeed[slot];
+
+        // Prefer the bit-exact cs2kz Strafe::End stats from the native AACall stream; fall back to the per-tick
+        // approximations only when the Core movement telemetry is absent (kz_native_movement 0 / sig failed).
+        var s     = ComputeStrafeStats(slot);
+        var hasAa = s.TotalDuration > 0f;
+        var sync    = hasAa ? 100f * s.Sync    / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _gainTicks[slot]    / _airTicks[slot] : 0f);
+        var overlap = hasAa ? 100f * s.Overlap / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _overlapTicks[slot] / _airTicks[slot] : 0f);
+        var deadair = hasAa ? 100f * s.DeadAir / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _deadairTicks[slot] / _airTicks[slot] : 0f);
+        var badAng  = hasAa ? 100f * s.BadAngles / s.TotalDuration : 0f;
+        var width   = hasAa ? s.Width : _width[slot];
 
         if (_clientManager.GetGameClient(slot) is not { IsFakeClient: false } client) return;
 
         client.Print(HudPrintChannel.Chat,
-            $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · " +
+            $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
-            $"{overlap:0}% ovl · {deadair:0}% air · {_width[slot]:0}° width");
+            $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width");
 
         // Persist the jump (jumpstats DB) — fire-and-forget, degrades to no-op without the request manager.
         if (_request is { } req)
@@ -248,6 +284,45 @@ public sealed class KreedzJumpstats : IModSharpModule
         while (a >  180f) a -= 360f;
         while (a < -180f) a += 360f;
         return a;
+    }
+
+    private readonly record struct StrafeStats(
+        float TotalDuration, float BadAngles, float Sync, float Overlap, float DeadAir, float Width);
+
+    // cs2kz Strafe::End (kz_jumpstats.cpp) over the jump's buffered AACalls. Classification per call is
+    // bit-exact — it's a pure function of the captured wishspeed/buttons and velocity pre/post the engine
+    // air-accel. Reported as fractions of total duration, so the exact tick-interval weighting only matters
+    // relative to itself. maxGain/CalcIdealGain (gain-efficiency %) is intentionally omitted — it needs the
+    // per-call accel + surfaceFriction, which aren't in the AACall yet.
+    private StrafeStats ComputeStrafeStats(PlayerSlot slot)
+    {
+        float total = 0, bad = 0, sync = 0, ovl = 0, dead = 0, width = 0;
+        foreach (var c in _aaCalls[slot])
+        {
+            total += c.Duration;
+
+            var preLen  = MathF.Sqrt(c.VelocityPre.X  * c.VelocityPre.X  + c.VelocityPre.Y  * c.VelocityPre.Y);
+            var postLen = MathF.Sqrt(c.VelocityPost.X * c.VelocityPost.X + c.VelocityPost.Y * c.VelocityPost.Y);
+            var ddx     = c.VelocityPost.X - c.VelocityPre.X;
+            var ddy     = c.VelocityPost.Y - c.VelocityPre.Y;
+            var deltaLen = MathF.Sqrt(ddx * ddx + ddy * ddy);
+
+            if (c.WishSpeed == 0f)
+            {
+                if ((c.Buttons.HasFlag(UserCommandButtons.Forward)   && c.Buttons.HasFlag(UserCommandButtons.Back))
+                    || (c.Buttons.HasFlag(UserCommandButtons.MoveLeft) && c.Buttons.HasFlag(UserCommandButtons.MoveRight)))
+                    ovl += c.Duration;   // both keys of an axis cancel → no wish (cs2kz overlap)
+                else
+                    dead += c.Duration;  // no directional input at all (cs2kz deadAir)
+            }
+            else if (deltaLen <= JsEpsilon)
+                bad += c.Duration;       // input, but velocity barely moved → quantization gain (cs2kz badAngles)
+            else if (postLen - preLen > JsEpsilon)
+                sync += c.Duration;      // real speed gained this call (cs2kz syncDuration)
+
+            width += MathF.Abs(NormalizeYaw(c.CurrentYaw - c.PrevYaw));
+        }
+        return new StrafeStats(total, bad, sync, ovl, dead, width);
     }
 
     // cs2kz per-mode, per-jump-type distance-tier tables (kz_mode_ckz.h / kz_mode_vnl.h). Rows index by
