@@ -63,10 +63,20 @@ public sealed class KreedzAnticheat : IModSharpModule
     private const int   SnaptapChain   = 128;        // cs2kz NUM_CONSECUTIVE_PERFECT_CSTRAFE minimum
     private readonly int[] _snapChain   = new int[PlayerSlot.MaxPlayerCount];
 
-    // Subtick-abuse flood detector (cs2kz subtick.cpp SUBTICK_SUSPICIOUS_MOVES: 20 in a 0.5s window).
-    private const int SubtickFloodThreshold = 20;
-    private readonly int[] _subtickWindow = new int[PlayerSlot.MaxPlayerCount];
-    private readonly int[] _subtickTicks  = new int[PlayerSlot.MaxPlayerCount];
+    // Desubticking detector (cs2kz subtick.cpp). A legit KB+M subtick move carries a fractional `When`; a
+    // "desubticking" cheat zeroes it. Over a ~20s window, if the vast majority of subtick-carrying commands
+    // are all-zero-`When`, flag. NOTE: cs2kz's other subtick checks (VerifyCommand, the "suspicious moves
+    // with angles" count that SUBTICK_SUSPICIOUS_MOVES_THRESHOLD actually gates) need the pitch/yaw-delta +
+    // full buttonstate protobuf fields ModSharp's MoveData does NOT expose — so only this zero-`When` ratio
+    // check is portable. The old raw-subtick-move count was WRONG (every legit strafe carries subtick moves).
+    private const int   DesubtickWindowTicks = 1280; // ~20s @ 64t  (SUBTICK_SUBTICK_INPUTS_WINDOW)
+    private const int   DesubtickMinCommands = 30;   //             (SUBTICK_SUBTICK_INPUTS_THRESHOLD)
+    private const float DesubtickRatio       = 0.9f; //             (SUBTICK_ZERO_WHEN_RATIO_THRESHOLD)
+    private const int   DesubtickWarmupTicks = 640;  // ~10s ignore on connect (SUBTICK_INITIAL_IGNORE_TIME)
+    private readonly int[] _subtickCmds     = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[] _subtickZeroWhen = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[] _subtickWinTicks = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[] _subtickSeen     = new int[PlayerSlot.MaxPlayerCount];
 
     // Autostrafe detector (cs2kz jumps.cpp) — a script strafes far more per second than a human. Per jump
     // (airtime >= 0.6s, sync > 0.7): if strafes/sec exceeds thresholds it's suspicious; too many suspicious
@@ -321,15 +331,34 @@ public sealed class KreedzAnticheat : IModSharpModule
     {
         var moves = arg.Info->SubTickMoves.AsReadOnlySpan();
 
-        // Subtick-abuse (flood) check (cs2kz subtick.cpp): a legit tick has only a few subtick input
-        // events; a cheat injecting fake subtick moves floods them. Accumulate over a ~0.5s window.
-        _subtickWindow[slot] += moves.Length;
-        if (++_subtickTicks[slot] >= 32) // ~0.5s at 64t
+        // ── Desubticking check (cs2kz subtick.cpp): over ~20s, if ≥90% of subtick-carrying commands have
+        // all-zero `When` on their button moves, it's a desubticking cheat. Skip a ~10s warmup on connect.
+        if (_subtickSeen[slot] <= DesubtickWarmupTicks) _subtickSeen[slot]++;
+        if (_subtickSeen[slot] > DesubtickWarmupTicks)
         {
-            if (_subtickWindow[slot] >= SubtickFloodThreshold)
-                Flag(client, $"subtick abuse ({_subtickWindow[slot]} subtick moves in 0.5s)");
-            _subtickWindow[slot] = 0;
-            _subtickTicks[slot]  = 0;
+            var hasButtonMove = false;
+            var allZeroWhen   = true;
+            foreach (ref readonly var mv in moves)
+            {
+                if ((int) mv.Button == 0) continue; // no button = analog/mouse — cs2kz excludes these
+                hasButtonMove = true;
+                if (mv.When != 0f) allZeroWhen = false;
+            }
+
+            if (hasButtonMove)
+            {
+                _subtickCmds[slot]++;
+                if (allZeroWhen) _subtickZeroWhen[slot]++;
+            }
+
+            if (++_subtickWinTicks[slot] >= DesubtickWindowTicks)
+            {
+                if (_subtickCmds[slot] >= DesubtickMinCommands
+                    && (float) _subtickZeroWhen[slot] / _subtickCmds[slot] >= DesubtickRatio)
+                    Flag(client, $"desubticking ({_subtickZeroWhen[slot]}/{_subtickCmds[slot]} zero-when subtick cmds in 20s)");
+
+                _subtickCmds[slot] = _subtickZeroWhen[slot] = _subtickWinTicks[slot] = 0;
+            }
         }
 
         if (moves.Length == 0) return;

@@ -18,6 +18,16 @@ public interface IKzModeRegistry
     /// <summary>Register a mode's metadata + convar layer. Idempotent per id (last registration wins).</summary>
     void RegisterMode(string id, string name, string shortName, IReadOnlyDictionary<string, string> convars);
 
+    /// <summary>
+    /// Register the mode's native-movement callbacks. Optional — a mode with no custom physics (e.g. VNL)
+    /// skips this and gets stock movement. Core installs the movement detours once and routes each player's
+    /// callbacks to the impl registered for their active mode id. Idempotent per id.
+    /// </summary>
+    void RegisterMovementMode(string id, IKzMovementMode mode);
+
+    /// <summary>The active player's movement-callback impl, or null if their mode registered none.</summary>
+    IKzMovementMode? GetMovementMode(PlayerSlot slot);
+
     /// <summary>The player's current mode id (defaults to the configured default, e.g. "vnl").</summary>
     string GetPlayerMode(PlayerSlot slot);
 

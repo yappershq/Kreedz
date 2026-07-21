@@ -2,18 +2,21 @@
  * yappershq/Kreedz (KZ) — Classic (CKZ) mode plugin
  *
  * A standalone ModSharp module that registers the Classic mode against Kreedz.Core's IKzModeRegistry AND
- * owns the CKZ custom movement — a faithful port of cs2kz kz_mode_ckz (CalcPrestrafe / GetPrestrafeGain /
- * OnStopTouchGround). Constants + formulas are transcribed verbatim from the cs2kz source (verified);
- * frametime/curtime come from the engine globals. All movement is gated on IKzModeRegistry.GetPlayerMode
- * == "ckz", so it only touches CKZ players. Drop this DLL next to Kreedz.Core to add Classic mode.
+ * implements its custom movement — a faithful port of cs2kz kz_mode_ckz (prestrafe/perf on ProcessMovePre;
+ * the AirMove cap, CategorizePosition rampbug and TryPlayerMove slopefix as IKzMovementMode callbacks).
  *
- * Fidelity note: this is the demo-validated crux. The math is exact; tick-for-tick certification vs
- * recorded cs2kz demos is the final pass. cs2kz spreads the physics across StartTouch/StopTouch/
- * CalcPrestrafe on its native detours; here it runs off ProcessMovePre + ground-state transitions.
+ * Native movement is NOT detoured here: Kreedz.Core installs the movement detours once and dispatches to
+ * this mode via IKzMovementMode (Core owns the trampolines so any mode shares them — cs2kz's architecture).
+ * Core only calls these callbacks for players whose active mode is "ckz", so the physics is naturally gated.
+ *
+ * Fidelity vs cs2kz (from the Rampfix/cs2kz audit): DONE — CategorizePosition now nudges before the engine
+ * (Core dispatch order), FrameTime reads engine globals. FOLLOW-UP — the OnTryPlayerMovePost commit gate,
+ * IsValidMovementTrace backward stuck-trace, duck-aware hull, and trigger-touch replay are still pending.
  */
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
@@ -27,10 +30,10 @@ using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Mode.Ckz;
 
-public sealed class KreedzModeCkz : IModSharpModule
+public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
 {
     // cs2kz kz_mode_ckz.h — verbatim.
-    private const float SpeedNormal         = 250.0f;
+    private const float SpeedNormal          = 250.0f;
     private const float PsSpeedMax           = 26.0f;
     private const float PsMinRewardRate      = 2.0f;
     private const float PsMaxRewardRate      = 15.5f;
@@ -43,17 +46,24 @@ public sealed class KreedzModeCkz : IModSharpModule
     private const float BhBaseMultiplier     = 51.5f;
     private const float BhLandingDecrement   = 75.0f;
 
+    // rampbug/slopefix constants (cs2kz kz_mode_ckz.h).
+    private const float RampBugThreshold   = 0.98f;   // RAMP_BUG_THRESHOLD
+    private const float RampPierceDistance = 0.0625f; // RAMP_PIERCE_DISTANCE
+    private const float NewRampThreshold   = 0.95f;   // NEW_RAMP_THRESHOLD
+    private const int   MaxBumps           = 4;       // MAX_BUMPS
+    private const float Epsilon            = 0.00001f;
+    private const float FltEpsilon         = 1.192092896e-07f;
+
     private static readonly float BhNormalizeFactor =
         BhBaseMultiplier * MathF.Log(SpeedNormal + PsSpeedMax) - (SpeedNormal + PsSpeedMax);
 
     private readonly ISharedSystem          _shared;
     private readonly IModSharp              _modSharp;
     private readonly IHookManager           _hookManager;
+    private readonly IPhysicsQueryManager   _physics;
     private readonly ILogger<KreedzModeCkz> _logger;
 
-    private readonly IConVar?        _nativeHooks;
-    private readonly IConVar?        _tpm;
-    private readonly MovementDetours _detours;
+    private readonly IConVar? _tpm;
 
     private IKzModeRegistry? _registry;
 
@@ -66,6 +76,15 @@ public sealed class KreedzModeCkz : IModSharpModule
     private readonly float[]  _landingTime     = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[]  _takeoffTime     = new float[PlayerSlot.MaxPlayerCount];
     private readonly Vector[] _landingVelocity = new Vector[PlayerSlot.MaxPlayerCount];
+
+    // slopefix per-player state (the native detours only get a CCSPlayer_MovementServices*; Core resolves
+    // the slot and hands it to us, so no {ms->slot} map is needed here anymore — Core owns that).
+    private readonly Vector[] _lastPlane = new Vector[PlayerSlot.MaxPlayerCount];
+    private readonly Vector[] _tpmStart  = new Vector[PlayerSlot.MaxPlayerCount];
+    private readonly Vector[] _tpmVel    = new Vector[PlayerSlot.MaxPlayerCount];
+    private readonly bool[]   _tpmRun    = new bool[PlayerSlot.MaxPlayerCount];
+
+    private bool _tpmEnabled;
 
     private readonly List<(float Rate, float Duration)>[] _angleHistory =
         new List<(float, float)>[PlayerSlot.MaxPlayerCount];
@@ -83,16 +102,11 @@ public sealed class KreedzModeCkz : IModSharpModule
         _shared      = shared;
         _modSharp    = shared.GetModSharp();
         _hookManager = shared.GetHookManager();
+        _physics     = shared.GetPhysicsQueryManager();
         _logger      = shared.GetLoggerFactory().CreateLogger<KreedzModeCkz>();
 
-        // The bit-exact native movement detours (staged; see MovementDetours). Gamedata registration +
-        // install happen in Init() inside a try/catch — a bad sig after a CS2 update must NOT fail the whole
-        // mode (it should degrade to the managed physics path), so it can't live in the ctor.
-        _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", true,
-            "Enable the native CKZ movement detours (bit-exact path). Set 0 if a sig breaks after a CS2 update.");
         _tpm = shared.GetConVarManager().CreateConVar("kz_ckz_tpm", false,
             "Enable the experimental TryPlayerMove slopefix reimplementation. Default 0 — validate against demos before enabling.");
-        _detours = new MovementDetours(_hookManager, shared.GetPhysicsQueryManager(), _modSharp.GetGameData(), _logger);
 
         for (var i = 0; i < _angleHistory.Length; i++)
             _angleHistory[i] = [];
@@ -102,22 +116,7 @@ public sealed class KreedzModeCkz : IModSharpModule
     {
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
-
-        if (_nativeHooks?.GetBool() == true)
-        {
-            try
-            {
-                _modSharp.GetGameData().Register("kreedz-ckz.games");
-                _detours.Install();
-            }
-            catch (System.Exception e)
-            {
-                _logger.LogError(e, "[CKZ] native detours unavailable (gamedata/sig failure) — running managed physics only. Set kz_ckz_native_hooks 0 to silence.");
-            }
-        }
-
-        _detours.TpmEnabled = _tpm?.GetBool() == true;
-
+        _tpmEnabled = _tpm?.GetBool() == true;
         return true;
     }
 
@@ -133,6 +132,7 @@ public sealed class KreedzModeCkz : IModSharpModule
         }
 
         _registry.RegisterMode("ckz", "Classic", "CKZ", Convars);
+        _registry.RegisterMovementMode("ckz", this); // Core routes the native movement callbacks to us
         _logger.LogInformation("[Kreedz.Mode.CKZ] registered.");
     }
 
@@ -140,7 +140,6 @@ public sealed class KreedzModeCkz : IModSharpModule
     {
         _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
-        _detours.Uninstall();
     }
 
     private bool IsCkz(PlayerSlot slot)
@@ -159,11 +158,6 @@ public sealed class KreedzModeCkz : IModSharpModule
             _wasGround[slot] = arg.Pawn.GroundEntityHandle.IsValid();
             return;
         }
-
-        // Register this player's native movement-service pointer → slot so the raw native detours (which
-        // only get a CCSPlayer_MovementServices*) can resolve the player for per-slot state.
-        if (_detours.Installed && arg.Pawn.GetPlayerMovementService() is { } msvc)
-            _detours.Map(msvc.GetAbsPtr(), slot);
 
         var globals   = _modSharp.GetGlobals();
         var frametime = globals.FrameTime;
@@ -190,11 +184,247 @@ public sealed class KreedzModeCkz : IModSharpModule
 
         CalcPrestrafe(slot, arg.Pawn.GetAbsVelocity(), onGround, frametime, curtime);
 
-        // Share the gain so the AirMove detour can restore 250+gain after the air-move (cs2kz OnAirMovePost).
-        if (_detours.Installed) _detours.SetGain(slot, GetPrestrafeGain(slot));
-
         _wasGround[slot] = onGround;
     }
+
+    // ── IKzMovementMode — native movement callbacks (Core installs the detours; we supply the physics) ──
+
+    /// <summary>cs2kz OnAirMove — cap air wishspeed to SPEED_NORMAL for the engine air-move.</summary>
+    public void OnAirMove(PlayerSlot slot, nint ms, nint mv)
+        => Move(mv).MaxSpeed = SpeedNormal;
+
+    /// <summary>cs2kz OnAirMovePost — restore max speed to 250 + prestrafe gain after the air-move.</summary>
+    public void OnAirMovePost(PlayerSlot slot, nint ms, nint mv)
+        => Move(mv).MaxSpeed = SpeedNormal + GetPrestrafeGain(slot);
+
+    /// <summary>cs2kz OnCategorizePosition — the rampbug origin nudge (Core calls this BEFORE the engine).</summary>
+    public void OnCategorizePosition(PlayerSlot slot, nint ms, nint mv, bool stayOnGround)
+    {
+        ref var md = ref Move(mv);
+        var (mins, maxs) = Hull();
+        var origin = md.AbsOrigin;
+        var plane  = _lastPlane[slot];
+
+        // Only fix while dropping (vz < -64) onto a plane steeper than a valid last plane we had.
+        if (!stayOnGround && Dot(plane, plane) >= Epsilon * Epsilon && plane.Z <= 0.7f && md.Velocity.Z <= -64.0f)
+        {
+            var trace = TraceDown(mins, maxs, origin);
+            if (trace.Fraction != 1.0f
+                && trace.Fraction < 0.95f && trace.PlaneNormal.Z > 0.7f && Dot(plane, trace.PlaneNormal) < RampBugThreshold)
+            {
+                var nudged = origin + plane * 0.0625f;
+                var trace2 = TraceDown(mins, maxs, nudged);
+                if (!trace2.StartInSolid && (trace2.Fraction == 1.0f || Dot(plane, trace2.PlaneNormal) >= RampBugThreshold))
+                {
+                    md.AbsOrigin = nudged;
+                    origin       = nudged;
+                }
+            }
+        }
+
+        // Track lastValidPlane: the surface we're currently resting on, if it's genuinely standable.
+        var g = TraceDown(mins, maxs, origin);
+        if (g.Fraction < 1.0f && g.PlaneNormal.Z > 0.7f)
+            _lastPlane[slot] = g.PlaneNormal;
+    }
+
+    /// <summary>cs2kz OnTryPlayerMove — capture pre-move state for the slopefix (gated on kz_ckz_tpm).</summary>
+    public void OnTryPlayerMovePre(PlayerSlot slot, nint ms, nint mv)
+    {
+        if (!_tpmEnabled) { _tpmRun[slot] = false; return; }
+        ref var pm = ref Move(mv);
+        _tpmStart[slot] = pm.AbsOrigin;
+        _tpmVel[slot]   = pm.Velocity;
+        _tpmRun[slot]   = true;
+    }
+
+    /// <summary>cs2kz OnTryPlayerMovePost — the slopefix collision reimplementation.</summary>
+    public void OnTryPlayerMovePost(PlayerSlot slot, nint ms, nint mv)
+    {
+        if (!_tpmRun[slot]) return;
+        TryPlayerMoveFix(slot, mv, _tpmStart[slot], _tpmVel[slot]);
+    }
+
+    // cs2kz KZClassicModeService::OnTryPlayerMove — MAX_BUMPS bump loop + 3x3x3 offset pierce search that
+    // detects+corrects rampbugs. overrideTPM is set only when a rampbug is found; only then is the computed
+    // origin/velocity written back. FOLLOW-UP: the post-move "velocity heavily modified" commit gate.
+    private void TryPlayerMoveFix(PlayerSlot slot, nint mv, Vector start, Vector velocity)
+    {
+        if (Len(velocity) == 0.0f) return;
+
+        var (mins, maxs) = Hull();
+        var plane        = _lastPlane[slot];
+        var primal       = velocity;
+        var frametime    = FrameTime();
+
+        var timeLeft   = frametime;
+        var allFraction = 0f;
+        var planes      = new Vector[5];
+        var numPlanes   = 0;
+        var overrideTPM = false;
+        var potentiallyStuck = false;
+        (float Frac, Vector Normal, Vector End, bool Solid) pm = default;
+
+        for (var bump = 0; bump < MaxBumps; bump++)
+        {
+            var end = start + velocity * timeLeft;
+            pm = Trace(mins, maxs, start, end);
+            if (end == start) continue;
+            if (IsValidMovementTrace(pm, mins, maxs) && pm.Frac == 1.0f) break;
+
+            var normalChanged = Dot(pm.Normal, plane) < RampBugThreshold;
+            var stuck         = potentiallyStuck && pm.Frac == 0.0f;
+            var lastWasWall   = plane.Z < 0.03125f;
+            var consider      = (normalChanged && !lastWasWall) || stuck;
+
+            if (Len(plane) > FltEpsilon && consider)
+            {
+                var offsets = new[] { 0.0f, -1.0f, 1.0f };
+                var success = false;
+                for (var i = 0; i < 3 && !success; i++)
+                for (var j = 0; j < 3 && !success; j++)
+                for (var k = 0; k < 3 && !success; k++)
+                {
+                    Vector offDir;
+                    if (i == 0 && j == 0 && k == 0) offDir = plane;
+                    else
+                    {
+                        offDir = new Vector(offsets[i], offsets[j], offsets[k]);
+                        if (Dot(plane, offDir) <= 0.0f) continue;
+                        var test0 = Trace(mins, maxs, start + offDir * RampPierceDistance, start);
+                        if (!IsValidMovementTrace(test0, mins, maxs)) continue;
+                    }
+
+                    var good = false; var hitNew = false; var validPlane = false;
+                    (float Frac, Vector Normal, Vector End, bool Solid) pierce = default;
+                    for (var ratio = 0.25f; ratio <= 1.0f; ratio += 0.25f)
+                    {
+                        pierce = Trace(mins, maxs, start + offDir * RampPierceDistance * ratio, end + offDir * RampPierceDistance * ratio);
+                        if (!IsValidMovementTrace(pierce, mins, maxs)) continue;
+                        validPlane = pierce.Frac < 1.0f && pierce.Frac > 0.1f && Dot(pierce.Normal, plane) >= RampBugThreshold;
+                        hitNew     = Dot(pm.Normal, pierce.Normal) < NewRampThreshold && Dot(plane, pierce.Normal) > NewRampThreshold;
+                        good       = MathF.Abs(pierce.Frac - 1.0f) < FltEpsilon || validPlane;
+                        if (good) break;
+                    }
+
+                    if (good || hitNew)
+                    {
+                        var test = Trace(mins, maxs, pierce.End, end);
+                        var denom = Len(end - start);
+                        var frac  = denom > 0f ? Math.Clamp(Len(pierce.End - start) / denom, 0.0f, 1.0f) : 0f;
+                        var normal = Len(pierce.Normal) > 0.0f ? pierce.Normal : test.Normal;
+                        pm = (frac, normal, test.End, pm.Solid);
+                        _lastPlane[slot] = normal;
+                        plane = normal;
+                        success = true;
+                        overrideTPM = true;
+                    }
+                }
+            }
+
+            if (Len(pm.Normal) > 0.99f) _lastPlane[slot] = pm.Normal;
+            potentiallyStuck = pm.Frac == 0.0f;
+
+            if (pm.Frac * Len(velocity) > 0.03125f || pm.Frac > 0.03125f)
+            {
+                allFraction += pm.Frac;
+                start = pm.End;
+                numPlanes = 0;
+            }
+
+            if (allFraction == 1.0f) break;
+            timeLeft -= frametime * pm.Frac;
+
+            if (numPlanes >= 5 || (pm.Normal.Z >= 0.7f && Len2D(velocity) < 1.0f)) { velocity = default; break; }
+
+            planes[numPlanes++] = pm.Normal;
+
+            if (numPlanes == 1) // (cs2kz also checks WALK + no ground entity; approximated as air-clip — FOLLOW-UP)
+            {
+                velocity = ClipVelocity(velocity, planes[0]);
+            }
+            else
+            {
+                int i, j;
+                for (i = 0; i < numPlanes; i++)
+                {
+                    velocity = ClipVelocity(velocity, planes[i]);
+                    for (j = 0; j < numPlanes; j++)
+                        if (j != i && Dot(velocity, planes[j]) < 0) break;
+                    if (j == numPlanes) break;
+                }
+
+                if (i == numPlanes)
+                {
+                    if (numPlanes != 2) { velocity = default; break; }
+                    var cd = Normalize(Cross(planes[0], planes[1]));
+                    velocity = cd * Dot(cd, velocity);
+                    if (Dot(velocity, primal) <= 0) { velocity = default; break; }
+                }
+            }
+        }
+
+        // Apply only when a rampbug was detected+fixed — otherwise the engine's result stands.
+        if (overrideTPM)
+        {
+            ref var md = ref Move(mv);
+            md.AbsOrigin = pm.End;
+            md.Velocity  = velocity;
+        }
+    }
+
+    // cs2kz ClipVelocity (1:1 with CS2): reflect velocity off a plane with the 0.03125 overbounce.
+    private static Vector ClipVelocity(Vector inV, Vector normal)
+    {
+        var backoff = -(inV.X * normal.X + normal.Z * inV.Z + inV.Y * normal.Y);
+        backoff = MathF.Max(backoff, 0.0f) + 0.03125f;
+        return normal * backoff + inV;
+    }
+
+    // cs2kz IsValidMovementTrace — reject start-in-solid, degenerate/deformed normals, and stuck spots.
+    // FOLLOW-UP: cs2kz also does a backward end->start trace rejecting StartInSolid (dropped here).
+    private bool IsValidMovementTrace((float Frac, Vector Normal, Vector End, bool Solid) tr, Vector mins, Vector maxs)
+    {
+        if (tr.Solid) return false;
+        if (tr.Frac < 1.0f && MathF.Abs(tr.Normal.X) < FltEpsilon && MathF.Abs(tr.Normal.Y) < FltEpsilon && MathF.Abs(tr.Normal.Z) < FltEpsilon) return false;
+        if (MathF.Abs(tr.Normal.X) > 1.0f || MathF.Abs(tr.Normal.Y) > 1.0f || MathF.Abs(tr.Normal.Z) > 1.0f) return false;
+
+        var stuck = Trace(mins, maxs, tr.End, tr.End);
+        return !stuck.Solid && stuck.Frac >= 1.0f - FltEpsilon;
+    }
+
+    // General hull trace start->end, values only (no ref-struct escape).
+    private (float Frac, Vector Normal, Vector End, bool Solid) Trace(Vector mins, Vector maxs, Vector start, Vector end)
+    {
+        var query = RnQueryShapeAttr.PlayerMovement(InteractionLayers.Solid);
+        var t = _physics.TraceShapePlayerMovement(new TraceShapeRay(new TraceShapeHull { Mins = mins, Maxs = maxs }), start, end, in query);
+        return (t.Fraction, t.PlaneNormal, t.EndPosition, t.StartInSolid);
+    }
+
+    // Returns plain values (not the GameTrace ref struct) so nothing aliases the local query.
+    private (float Fraction, Vector PlaneNormal, bool StartInSolid) TraceDown(Vector mins, Vector maxs, Vector origin)
+    {
+        var end = origin; end.Z -= 2.0f;
+        var query = RnQueryShapeAttr.PlayerMovement(InteractionLayers.Solid);
+        var t = _physics.TraceShapePlayerMovement(new TraceShapeRay(new TraceShapeHull { Mins = mins, Maxs = maxs }), origin, end, in query);
+        return (t.Fraction, t.PlaneNormal, t.StartInSolid);
+    }
+
+    // Standard CS2 standing player hull. Ducking (maxs.z 54) is a FOLLOW-UP refinement.
+    private static (Vector Mins, Vector Maxs) Hull()
+        => (new Vector(-16f, -16f, 0f), new Vector(16f, 16f, 72f));
+
+    // #5 fidelity fix: read the engine's live frametime rather than a hardcoded 1/64 (matters off 64-tick).
+    private float FrameTime() => _modSharp.GetGlobals().FrameTime;
+
+    private static float Len(Vector v)   => MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+    private static float Len2D(Vector v) => MathF.Sqrt(v.X * v.X + v.Y * v.Y);
+    private static Vector Normalize(Vector v) { var l = Len(v); return l > 0f ? new Vector(v.X / l, v.Y / l, v.Z / l) : default; }
+    private static Vector Cross(Vector a, Vector b)
+        => new(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
+    private static float Dot(Vector a, Vector b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+
+    private static ref MoveData Move(nint mv) => ref Unsafe.AsRef<MoveData>((void*)mv);
 
     /// <summary>cs2kz KZClassicModeService::CalcPrestrafe.</summary>
     private void CalcPrestrafe(PlayerSlot slot, Vector velocity, bool onGround, float frametime, float curtime)

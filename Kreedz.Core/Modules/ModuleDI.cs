@@ -50,6 +50,10 @@ internal static class ModuleDI
         // KZ port: mode framework + Vanilla mode (cs2kz src/kz/mode; CKZ movement at P5).
         services.ImplSingleton<IModeModule, IModule, ModeModule>();
 
+        // KZ port: Core-owned native movement detours (installed once; dispatched to the active player's mode
+        // via IKzMovementMode, so any mode plugin shares one set of trampolines — cs2kz's architecture).
+        services.AddSingleton<IModule, MovementModule>();
+
         // KZ port: !goto <player> (cs2kz src/kz/goto).
         services.ImplSingleton<IGotoModule, IModule, GotoModule>();
 

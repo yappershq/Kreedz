@@ -29,6 +29,9 @@ internal interface IModeModule
 
     /// <summary>Re-apply the player's current mode convars (base layer; styles stack on top after).</summary>
     void Reapply(PlayerSlot slot);
+
+    /// <summary>The active player's movement-callback impl (CKZ physics), or null (stock movement).</summary>
+    IKzMovementMode? GetMovementMode(PlayerSlot slot);
 }
 
 internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
@@ -43,6 +46,9 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
     private readonly record struct ModeInfo(string Name, string ShortName, IReadOnlyDictionary<string, string> Convars);
 
     private readonly Dictionary<string, ModeInfo> _modes = new(StringComparer.OrdinalIgnoreCase);
+    // A mode's optional native-movement callbacks (CKZ registers physics; VNL registers none). Core's
+    // MovementModule installs the detours once and routes each player's callbacks to the impl for their mode.
+    private readonly Dictionary<string, IKzMovementMode> _movementModes = new(StringComparer.OrdinalIgnoreCase);
     private readonly string[] _current = new string[PlayerSlot.MaxPlayerCount];
 
     private const string PrefKey = "mode";
@@ -96,6 +102,15 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
     }
 
     public string GetPlayerMode(PlayerSlot slot) => _current[slot];
+
+    public void RegisterMovementMode(string id, IKzMovementMode mode)
+    {
+        _movementModes[id] = mode;
+        _logger.LogInformation("[KZ.Mode] registered movement callbacks for mode {Id}", id);
+    }
+
+    public IKzMovementMode? GetMovementMode(PlayerSlot slot)
+        => _movementModes.TryGetValue(_current[slot], out var m) ? m : null;
 
     // ── IModeModule (internal) ────────────────────────────────────────────────
     public string GetMode(PlayerSlot slot) => _current[slot];
