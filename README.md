@@ -37,7 +37,7 @@ Copy the build output into your ModSharp install (`<sharp>` = your `sharp` direc
 | `sharp/modules/Kreedz.Mode.VNL/` | `<sharp>/modules/Kreedz.Mode.VNL/` |
 | `sharp/modules/Kreedz.Mode.CKZ/` | `<sharp>/modules/Kreedz.Mode.CKZ/` |
 | `sharp/shared/Kreedz.Shared/` | `<sharp>/shared/Kreedz.Shared/` |
-| `.assets/gamedata/kreedz.games.jsonc` | `<sharp>/gamedata/kreedz.games.jsonc` |
+| `.assets/gamedata/*.jsonc` | `<sharp>/gamedata/` |
 | `.assets/configs/*.jsonc` | `<sharp>/configs/` |
 
 Restart the server (or change map) to load. `Kreedz.Mode.VNL` / `Kreedz.Mode.CKZ` are optional — install
@@ -124,6 +124,7 @@ Key ConVars:
 | `kz_global_apikey` | `""` | cs2kz global API key. **Empty = global disabled** (local ranking only) |
 | `kz_global_url` | `https://api.cs2kz.org` | Global API base URL |
 | `kz_ac_autokick` | `false` | Anticheat kicks flagged players instead of warning |
+| `kz_ckz_native_hooks` | `false` | Enable the bit-exact native movement detours (staged — validate on a test server first) |
 
 (Plus `timer_*` ConVars inherited from the base for replay/timer tuning.)
 

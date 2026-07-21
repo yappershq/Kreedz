@@ -51,6 +51,9 @@ public sealed class KreedzModeCkz : IModSharpModule
     private readonly IHookManager           _hookManager;
     private readonly ILogger<KreedzModeCkz> _logger;
 
+    private readonly IConVar?        _nativeHooks;
+    private readonly MovementDetours _detours;
+
     private IKzModeRegistry? _registry;
 
     private readonly float[] _bonusSpeed    = new float[PlayerSlot.MaxPlayerCount];
@@ -81,6 +84,13 @@ public sealed class KreedzModeCkz : IModSharpModule
         _hookManager = shared.GetHookManager();
         _logger      = shared.GetLoggerFactory().CreateLogger<KreedzModeCkz>();
 
+        // The bit-exact native movement detours (staged; see MovementDetours). Off by default — they
+        // read/replace native movement and must be validated on a live server before enabling.
+        _modSharp.GetGameData().Register("kreedz-ckz.games");
+        _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", false,
+            "Enable the native CKZ movement detours (bit-exact path). Requires a validated build — off by default.");
+        _detours = new MovementDetours(_hookManager, _logger);
+
         for (var i = 0; i < _angleHistory.Length; i++)
             _angleHistory[i] = [];
     }
@@ -89,6 +99,10 @@ public sealed class KreedzModeCkz : IModSharpModule
     {
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
+
+        if (_nativeHooks?.GetBool() == true)
+            _detours.Install();
+
         return true;
     }
 
@@ -111,6 +125,7 @@ public sealed class KreedzModeCkz : IModSharpModule
     {
         _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
+        _detours.Uninstall();
     }
 
     private bool IsCkz(PlayerSlot slot)
