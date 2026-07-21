@@ -43,6 +43,8 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
     private readonly IPreferencesModule  _prefs;
     private readonly ILogger<ModeModule> _logger;
 
+    private ITimerModule _timerModule = null!; // resolved in OnPostInit (avoid ctor DI cycle)
+
     private readonly record struct ModeInfo(string Name, string ShortName, IReadOnlyDictionary<string, string> Convars);
 
     private readonly Dictionary<string, ModeInfo> _modes = new(StringComparer.OrdinalIgnoreCase);
@@ -76,8 +78,11 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
 
     // Publish the registry so external mode plugins can register in their OnAllSharpModulesLoaded.
     public void OnPostInit(ServiceProvider provider)
-        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzModeRegistry>(
-               _bridge.Entrypoint, IKzModeRegistry.Identity, this);
+    {
+        _timerModule = provider.GetRequiredService<ITimerModule>();
+        _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzModeRegistry>(
+            _bridge.Entrypoint, IKzModeRegistry.Identity, this);
+    }
 
     public void Shutdown()
     {
@@ -145,6 +150,7 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
 
         _current[slot] = id;
         _prefs.Set(slot, PrefKey, id);
+        _timerModule.StopTimer(slot); // cs2kz: switching mode invalidates the current run
         PlayerModeChanged?.Invoke(slot, id);
 
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)

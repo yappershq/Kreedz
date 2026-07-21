@@ -39,6 +39,8 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
     private readonly IPreferencesModule     _prefs;
     private readonly ILogger<KzStyleModule> _logger;
 
+    private ITimerModule _timerModule = null!; // resolved in OnPostInit (avoid ctor DI cycle)
+
     private readonly record struct StyleInfo(string Name, string ShortName, IReadOnlyDictionary<string, string> Convars);
 
     private readonly Dictionary<string, StyleInfo> _styles = new(StringComparer.OrdinalIgnoreCase);
@@ -71,8 +73,11 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
     }
 
     public void OnPostInit(ServiceProvider provider)
-        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzStyleRegistry>(
-               _bridge.Entrypoint, IKzStyleRegistry.Identity, this);
+    {
+        _timerModule = provider.GetRequiredService<ITimerModule>();
+        _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzStyleRegistry>(
+            _bridge.Entrypoint, IKzStyleRegistry.Identity, this);
+    }
 
     public void Shutdown() => _prefs.Loaded -= OnPreferencesLoaded;
 
@@ -134,6 +139,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
         if (enable) _active[slot].Add(id);
         else        _active[slot].Remove(id);
 
+        _timerModule.StopTimer(slot); // cs2kz: changing style invalidates the current run
         Persist(slot);
         ReapplyAll(slot);
         Msg(slot, enable ? "Kreedz_Style_Enabled" : "Kreedz_Style_Disabled", style.Name);
@@ -142,6 +148,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
     private void ClearStyles(PlayerSlot slot)
     {
         _active[slot].Clear();
+        _timerModule.StopTimer(slot); // cs2kz: changing style invalidates the current run
         Persist(slot);
         ReapplyAll(slot);
         Msg(slot, "Kreedz_Style_Cleared");
