@@ -89,7 +89,7 @@ public sealed class KreedzModeCkz : IModSharpModule
         _modSharp.GetGameData().Register("kreedz-ckz.games");
         _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", true,
             "Enable the native CKZ movement detours (bit-exact path). Set 0 if a sig breaks after a CS2 update.");
-        _detours = new MovementDetours(_hookManager, shared.GetPhysicsQueryManager(), _logger);
+        _detours = new MovementDetours(_hookManager, shared.GetPhysicsQueryManager(), _modSharp.GetGameData(), _logger);
 
         for (var i = 0; i < _angleHistory.Length; i++)
             _angleHistory[i] = [];

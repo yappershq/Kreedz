@@ -28,6 +28,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System;
 using Microsoft.Extensions.Logging;
+using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.Hooks;
 using Sharp.Shared.Managers;
@@ -46,8 +47,11 @@ internal sealed unsafe class MovementDetours
 
     private readonly IHookManager             _hookManager;
     private readonly IPhysicsQueryManager     _physics;
+    private readonly IGameData                _gameData;
     private readonly ILogger                  _logger;
     private readonly List<IRuntimeNativeHook> _hooks = [];
+
+    private static nint _tFinishMove;
 
     // Reverse map {native CCSPlayer_MovementServices* -> slot}, filled from the managed ProcessMove hook
     // (which has both the pawn and the slot) so the raw native detours can resolve the player.
@@ -65,10 +69,11 @@ internal sealed unsafe class MovementDetours
                         _tCheckVelocity, _tCheckWater, _tWaterMove, _tLadderMove, _tCheckFalling,
                         _tFullWalkMove, _tMoveInit;
 
-    public MovementDetours(IHookManager hookManager, IPhysicsQueryManager physics, ILogger logger)
+    public MovementDetours(IHookManager hookManager, IPhysicsQueryManager physics, IGameData gameData, ILogger logger)
     {
         _hookManager = hookManager;
         _physics     = physics;
+        _gameData    = gameData;
         _logger      = logger;
     }
 
@@ -109,7 +114,7 @@ internal sealed unsafe class MovementDetours
         _tFullWalkMove       = Hook("FullWalkMove",          (nint)(delegate* unmanaged<nint, nint, byte, void>)&Hk_FullWalkMove);
         _tMoveInit           = Hook("MoveInit",              (nint)(delegate* unmanaged<nint, nint, byte>)&Hk_MoveInit);
 
-        // TODO: FinishMove is a vtable func (offset 38/39) — install via CreateVirtualHook, not a sig detour.
+        InstallFinishMoveVHook();
 
         _self    = this;
         Installed = true;
@@ -123,6 +128,41 @@ internal sealed unsafe class MovementDetours
         _hooks.Clear();
         Installed = false;
     }
+
+    // FinishMove is a vtable func (index 38 Win / 39 Linux in kreedz-ckz.games VFuncs), not a sig — hook
+    // it virtually. cs2kz has no CKZ-specific FinishMove physics, so this is a faithful pass-through that
+    // completes the detour surface + gives a landing point for any future post-move fill.
+    private void InstallFinishMoveVHook()
+    {
+        try
+        {
+            if (!_gameData.GetVFuncIndex("CCSPlayer_MovementServices::FinishMove", out var idx))
+            {
+                _logger.LogWarning("[CKZ] FinishMove vfunc index not in gamedata — skipping vhook.");
+                return;
+            }
+
+            var hook = _hookManager.CreateVirtualHook();
+            hook.Prepare("server", "CCSPlayer_MovementServices", idx, (nint)(delegate* unmanaged<nint, nint, void>)&Hk_FinishMove);
+
+            if (!hook.Install())
+            {
+                _logger.LogWarning("[CKZ] failed to install FinishMove vhook.");
+                return;
+            }
+
+            _tFinishMove = hook.Trampoline;
+            _hooks.Add(hook);
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "[CKZ] FinishMove vhook install threw.");
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    private static void Hk_FinishMove(nint ms, nint mv)
+        => ((delegate* unmanaged<nint, nint, void>)_tFinishMove)(ms, mv);
 
     /// <summary>Typed view over the raw CMoveData* — ModSharp's ported struct, platform-correct offsets.</summary>
     private static ref MoveData Move(nint mv) => ref Unsafe.AsRef<MoveData>((void*)mv);
