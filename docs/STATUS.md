@@ -12,7 +12,7 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 |---|---|---|
 | Timer | 🟡 | PRO/STANDARD run semantics done. Missing: named courses (mapping-API), split zones, strict start-validation gate, global submission/announce flow. |
 | Checkpoints / teleports | ✅ | `cp/tp/undo/prevcp/nextcp/setstartpos/clearstartpos`. Startpos not DB-persisted. |
-| Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. Convar coverage 13/33 (VNL) & 17/33 (CKZ); registry has no movement-callback API. |
+| Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. **Full 33/33 convar layer** now; registry still has no movement-callback API (3rd-party modes can't add custom physics hooks yet). |
 | Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
 | Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
 | Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
@@ -27,8 +27,10 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 
 ## Not started (missing subsystems vs cs2kz)
 
-- **Mapping API + KZ trigger system** — the biggest gap. Kreedz matches legacy targetnames only, so modern
-  keyvalue-driven kz_ maps (courses, antibhop/teleport/modifier/push triggers) register **no zones**.
+- **Mapping API + KZ trigger system** — the biggest gap. Model + parser now built (`Modules/MappingApi/`,
+  verbatim from cs2kz, verified) but **not yet wired to a live keyvalue source**: ModSharp exposes no
+  managed spawn-keyvalue read, so the source (native `CEntityKeyValues` detour vs. offline entity-lump
+  extract) is a pending decision. Until wired, modern keyvalue-driven kz_ maps still register no zones.
 - **Localization** — all output is hardcoded English; cs2kz has a ~30-language phrase system.
 - **saveloc/loadloc**, **quiet (!hide/!hidelegs)**, **beam trails**, **paint**, **ztopwatch** (2-zone practice
   stopwatch), **profile** (rank titles/clan tag), **spec-by-name/speclist**, **racing/1v1**, **telemetry**.
