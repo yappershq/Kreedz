@@ -53,5 +53,8 @@ internal static class ModuleDI
 
         // KZ port: !measure 2-point distance tool (cs2kz src/kz/measure).
         services.ImplSingleton<IMeasureModule, IModule, MeasureModule>();
+
+        // KZ port: !pistol <name> (cs2kz src/kz/pistol).
+        services.ImplSingleton<IPistolModule, IModule, PistolModule>();
     }
 }
