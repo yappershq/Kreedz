@@ -44,7 +44,17 @@ public sealed class KreedzAnticheat : IModSharpModule
 
     private IRequestManager? _request; // resolved cross-plugin for infraction persistence
     private readonly IConVar                 _autokick;
+    private readonly IConVar                 _autoban;
+    private readonly IConVar                 _banThreshold;
+    private readonly IConVar                 _banMinutes;
     private readonly IConVar?                _svCheats;
+
+    // Autoban accumulation (cs2kz Infraction→Finalize, simplified): confirmed flags within a fixed window;
+    // once the count crosses kz_ac_ban_threshold, ban for kz_ac_ban_minutes. Fixed-window auto-resets, so a
+    // reused slot never inherits a prior player's count. Default OFF (admin opt-in, like autokick).
+    private const float BanWindow = 600f; // 10 min
+    private readonly int[]   _infractions      = new int[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _infractionWindow = new float[PlayerSlot.MaxPlayerCount];
 
     private const int NullsChain = 20; // clean counter-strafes in a row no human hits (cs2kz nulls detector)
 
@@ -135,6 +145,12 @@ public sealed class KreedzAnticheat : IModSharpModule
         var cvar = shared.GetConVarManager();
         _autokick = cvar.CreateConVar("kz_ac_autokick", false,
             "Anticheat kicks flagged players instead of warning.")!;
+        _autoban = cvar.CreateConVar("kz_ac_autoban", false,
+            "Anticheat bans a player after kz_ac_ban_threshold flags within 10 minutes.")!;
+        _banThreshold = cvar.CreateConVar("kz_ac_ban_threshold", 3,
+            "Number of flags within the window that triggers an autoban (see kz_ac_autoban).")!;
+        _banMinutes = cvar.CreateConVar("kz_ac_ban_minutes", 1440,
+            "Autoban duration in minutes (default 1440 = 1 day).")!;
         _svCheats = cvar.FindConVar("sv_cheats");
     }
 
@@ -425,10 +441,43 @@ public sealed class KreedzAnticheat : IModSharpModule
             _ = SaveInfractionAsync(req, sid, type, details);
         }
 
+        // Autoban accumulation (cs2kz Infraction→Finalize, simplified): once flags cross the threshold within
+        // the window, ban + kick. Fixed-window so a reused slot never inherits a prior player's count.
+        if (_autoban.GetBool() && _request is { } banReq)
+        {
+            var slot = client.Slot;
+            var now  = _modSharp.GetGlobals().CurTime;
+
+            if (now - _infractionWindow[slot] > BanWindow)
+            {
+                _infractions[slot]      = 0;
+                _infractionWindow[slot] = now;
+            }
+
+            if (++_infractions[slot] >= _banThreshold.GetInt32())
+            {
+                _infractions[slot] = 0;
+                var expiresAt = DateTime.UtcNow.AddMinutes(_banMinutes.GetInt32());
+                _ = BanAsync(banReq, client.SteamId, reason, expiresAt);
+                _clientManager.KickClient(client, $"KZ: Anticheat ban ({reason})");
+                return;
+            }
+        }
+
         if (_autokick.GetBool())
             _clientManager.KickClient(client, $"KZ: {reason}");
         else
             client.Print(HudPrintChannel.Chat, $"[KZ] Anticheat flagged: {reason}.");
+    }
+
+    private async System.Threading.Tasks.Task BanAsync(IRequestManager req, SteamID sid, string reason, DateTime expiresAt)
+    {
+        try
+        {
+            await req.AddBanAsync(sid, $"Anticheat: {reason}", expiresAt);
+            _logger.LogWarning("[KZ.AC] auto-banned {Sid} until {Exp} ({Reason})", sid, expiresAt, reason);
+        }
+        catch (Exception e) { _logger.LogError(e, "[KZ.AC] failed to auto-ban {Sid}", sid); }
     }
 
     private async System.Threading.Tasks.Task SaveInfractionAsync(IRequestManager req, SteamID sid, string type, string? details)
