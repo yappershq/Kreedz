@@ -20,7 +20,7 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 | DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
 | Global API | 🟡 | External `Kreedz.Global` plugin (submit-only: hello + NewRecord via `IKzRunService.RunFinished`). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. Live-gated (needs a real key). |
-| Anticheat | 🟡 | External `Kreedz.Anticheat`. **6 detectors:** invalid-cvar, bhop-chain, nulls, snaptap (subtick), **strafe-optimizer** (yaw-accel), **subtick-abuse** (flood). Covers all of cs2kz's real telemetry detectors (nulls/snaptap/strafe-hack/subtick); "hyperscroll" isn't a cs2kz detector. Missing: jumps.cpp autostrafe (overlaps strafe-optimizer), infractions DB. |
+| Anticheat | ✅ | External `Kreedz.Anticheat`. **All 6 cs2kz detector files ported** (7 detectors): invalid-cvar (cvars), bhop-chain (bhop), nulls + snaptap (nulls), **autostrafe (jumps)**, strafe-optimizer, subtick-abuse. "hyperscroll" isn't a cs2kz detector. Only the infractions DB persistence remains. |
 | Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted. |
 | Preferences | ✅ | Mode/FOV/styles persist across reconnect (subset of cs2kz option keys). |
 | Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`, `noclip`. |
