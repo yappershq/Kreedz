@@ -20,6 +20,7 @@ using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Managers;
+using Sharp.Shared.Objects;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
@@ -48,6 +49,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     private IKzModeRegistry?      _mode;      // resolved cross-plugin to pick the per-mode tier table
     private IRequestManager?      _request;   // resolved cross-plugin for jump persistence
     private IKzMovementTelemetry? _telemetry; // Core AACall stream — bit-exact badAngles/sync/gain/width
+    private IConVar?              _airMaxWishspeed; // sv_air_max_wishspeed — the mode-set air wishspeed cap
 
     // Per-jump AACall buffer (cs2kz Jump::strafes[].aaCalls). Filled from the Core AirAccelerate detour while a
     // tracked jump is airborne; cleared on takeoff; drained on landing into the exact cs2kz Strafe::End stats.
@@ -99,6 +101,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     public bool Init()
     {
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _airMaxWishspeed = _shared.GetConVarManager().FindConVar("sv_air_max_wishspeed");
         return true;
     }
 
@@ -264,8 +267,10 @@ public sealed class KreedzJumpstats : IModSharpModule
 
         if (_clientManager.GetGameClient(slot) is not { IsFakeClient: false } client) return;
 
+        var effStr = hasAa ? $" · {s.GainEff:0}% eff" : "";
+
         client.Print(HudPrintChannel.Chat,
-            $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad · " +
+            $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad{effStr} · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
             $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width{ext}");
 
@@ -290,7 +295,38 @@ public sealed class KreedzJumpstats : IModSharpModule
 
     private readonly record struct StrafeStats(
         float TotalDuration, float BadAngles, float Sync, float Overlap, float DeadAir, float Width,
-        float ExternalGain, float ExternalLoss);
+        float ExternalGain, float ExternalLoss, float GainEff);
+
+    // ponytail: ModSharp doesn't expose m_flSurfaceFriction; it's 1.0 in air, which is where these AACalls run
+    // (air-strafe jumpstats). Upgrade path: read the schema offset off the movement service if a surface-friction
+    // KZ map ever appears.
+    private const float SurfaceFriction = 1.0f;
+
+    // cs2kz AACall::CalcAccelSpeed / CalcIdealYaw / CalcIdealGain — the ideal (theoretical-max) speed gain for a
+    // call, used for gain-efficiency (actual airGain / ideal maxGain). CalcIdealYaw returns radians.
+    private static float CalcAccelSpeed(in AaCall c)
+        => (c.WishSpeed == 0f ? c.MaxSpeed : c.WishSpeed) * c.Accel * SurfaceFriction * c.Duration;
+
+    private static float CalcIdealYaw(in AaCall c, float wishspeedCapped)
+    {
+        var accelspeed = CalcAccelSpeed(c);
+        if (accelspeed <= 0f) return MathF.PI;
+        var speed = MathF.Sqrt(c.VelocityPre.X * c.VelocityPre.X + c.VelocityPre.Y * c.VelocityPre.Y);
+        if (speed == 0f) return 0f;
+        var tmp = wishspeedCapped - accelspeed;
+        if (tmp <= 0f) return MathF.PI / 2f;
+        return tmp < speed ? MathF.Acos(tmp / speed) : 0f;
+    }
+
+    private static float CalcIdealGain(in AaCall c, float wishspeedCapped)
+    {
+        var preLen2Sqr  = c.VelocityPre.X * c.VelocityPre.X + c.VelocityPre.Y * c.VelocityPre.Y;
+        var preLen      = MathF.Sqrt(preLen2Sqr);
+        var accelCapped = MathF.Min(CalcAccelSpeed(c), wishspeedCapped);
+        var idealSpeed  = MathF.Sqrt(preLen2Sqr + accelCapped * accelCapped
+                                     + 2f * accelCapped * preLen * MathF.Cos(CalcIdealYaw(c, wishspeedCapped)));
+        return idealSpeed - preLen;
+    }
 
     // cs2kz Strafe::End (kz_jumpstats.cpp) over the jump's buffered AACalls. Classification per call is
     // bit-exact — it's a pure function of the captured wishspeed/buttons and velocity pre/post the engine
@@ -299,7 +335,8 @@ public sealed class KreedzJumpstats : IModSharpModule
     // per-call accel + surfaceFriction, which aren't in the AACall yet.
     private StrafeStats ComputeStrafeStats(PlayerSlot slot)
     {
-        float total = 0, bad = 0, sync = 0, ovl = 0, dead = 0, width = 0, extGain = 0, extLoss = 0;
+        float total = 0, bad = 0, sync = 0, ovl = 0, dead = 0, width = 0, extGain = 0, extLoss = 0, airGain = 0, maxGain = 0;
+        var wishspeedCapped = _airMaxWishspeed?.GetFloat() ?? 30f; // sv_air_max_wishspeed default
         foreach (var c in _aaCalls[slot])
         {
             total += c.Duration;
@@ -329,8 +366,13 @@ public sealed class KreedzJumpstats : IModSharpModule
             // externalGain/externalLoss, split by sign of the cross-tick speed delta.
             if (c.ExternalSpeedDiff > 0) extGain += c.ExternalSpeedDiff;
             else                         extLoss += c.ExternalSpeedDiff;
+
+            // Gain efficiency: actual speed gained vs the theoretical ideal (cs2kz airGain / maxGain).
+            if (postLen - preLen > 0f) airGain += postLen - preLen;
+            maxGain += CalcIdealGain(c, wishspeedCapped);
         }
-        return new StrafeStats(total, bad, sync, ovl, dead, width, extGain, extLoss);
+        var gainEff = maxGain > 0f ? 100f * airGain / maxGain : 0f;
+        return new StrafeStats(total, bad, sync, ovl, dead, width, extGain, extLoss, gainEff);
     }
 
     // cs2kz per-mode, per-jump-type distance-tier tables (kz_mode_ckz.h / kz_mode_vnl.h). Rows index by

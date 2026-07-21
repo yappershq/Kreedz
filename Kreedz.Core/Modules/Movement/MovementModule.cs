@@ -223,7 +223,9 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
             CurrentYaw:   md.ViewAngles.Y,
             // cs2kz: velocityPre.Length2D() - moveDataPost(last tick).m_vecVelocity.Length2D() — speed injected
             // between ticks by something other than the player (boosters, teleport pushes) → external gain/loss.
-            ExternalSpeedDiff: preLen2D - self._lastPostVelLen2D[slot]));
+            ExternalSpeedDiff: preLen2D - self._lastPostVelLen2D[slot],
+            Accel:            accel,          // AirAccelerate's accel param, for jumpstats CalcIdealGain
+            MaxSpeed:         md.MaxSpeed));  // CMoveData m_flMaxSpeed (managed accessor)
     }
 
     private nint Hook(string name, nint hookFn)
