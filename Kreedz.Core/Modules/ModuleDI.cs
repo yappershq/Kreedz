@@ -66,8 +66,7 @@ internal static class ModuleDI
         // KZ port: stackable styles (ABH/LGJ; cs2kz src/kz/style). Layers on top of the mode.
         services.ImplSingleton<IKzStyleModule, IModule, KzStyleModule>();
 
-        // KZ port: jumpstats foundation — LJ/BH detection + distance tiers (cs2kz src/kz/jumpstats).
-        services.ImplSingleton<IJumpstatsModule, IModule, JumpstatsModule>();
+        // KZ port: jumpstats now ships as the external Kreedz.Jumpstats plugin (ISharedSystem + IKzStyleRegistry).
 
         // KZ port: KZ run semantics (Pro/Standard from teleport count) on the timer (cs2kz src/kz/timer).
         services.ImplSingleton<IKzTimerModule, IModule, KzTimerModule>();

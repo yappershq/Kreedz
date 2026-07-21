@@ -18,4 +18,5 @@
   <Project Path="Kreedz.Style.WSOnly/Kreedz.Style.WSOnly.csproj" />
   <Project Path="Kreedz.Style.ADOnly/Kreedz.Style.ADOnly.csproj" />
   <Project Path="Kreedz.Anticheat/Kreedz.Anticheat.csproj" />
+  <Project Path="Kreedz.Jumpstats/Kreedz.Jumpstats.csproj" />
 </Solution>
