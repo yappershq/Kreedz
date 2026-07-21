@@ -1,63 +1,77 @@
 /*
- * yappershq/Timer (KZ) — CS2KZ port
+ * yappershq/Kreedz (KZ) — Anticheat plugin (1:1 cs2kz src/kz/anticheat)
  *
- * KZ anticheat (1:1 cs2kz src/kz/anticheat). Two detectors so far:
+ * A standalone ModSharp module (split out of Core, like the mode/style plugins) — it depends only on
+ * ISharedSystem primitives (hooks, convars, client manager), no Core-internal services, so it's a clean
+ * drop-in that a server can install or omit.
+ *
+ * Detectors:
  *   1. Invalid client-cvar — illegal client convar values that enable cheating (tampered m_yaw,
  *      out-of-range cl_pitchdown/up), checked on spawn.
- *   2. Bhop-hack — an inhuman chain of consecutive perfect bhops (each jump landing within the perf
+ *   2. Bhop-hack — an inhuman chain of consecutive perfect bhops (>=25, each takeoff within the perf
  *      window). No human hits 25 perfs in a row; a scripted bhop does it every jump.
  * Both log and optionally kick (`kz_ac_autokick`, default off — matching cs2kz). All detection is
- * disabled while `sv_cheats 1` and for fake clients. The remaining telemetry detectors (nulls/snaptap,
- * hyperscroll, strafe-hack, subtick) + the ban pipeline layer onto the same movement hook.
+ * disabled while `sv_cheats 1` and for fake clients. The telemetry detectors (nulls/snaptap, hyperscroll,
+ * strafe-optimizer, subtick) layer onto the same movement hook + are tuned against real movement data.
  */
 
 using System;
 using System.Globalization;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
+using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
 using Sharp.Shared.Units;
-using Kreedz.Shared.Interfaces;
 
-namespace Kreedz.Modules;
+namespace Kreedz.Anticheat;
 
-internal interface IAnticheatModule;
-
-internal sealed class AnticheatModule : IModule, IAnticheatModule
+public sealed class KreedzAnticheat : IModSharpModule
 {
-    private const int   BhopHackChain = 25;       // cs2kz — perfs in a row that no human can hit
-    private const float PerfWindow    = 0.02f;     // cs2kz BH_PERF_WINDOW
+    private const int   BhopHackChain = 25;    // cs2kz — perfs in a row that no human can hit
+    private const float PerfWindow    = 0.02f; // cs2kz BH_PERF_WINDOW
     private const float TickTime      = 1f / 64f;
 
-    private readonly InterfaceBridge          _bridge;
-    private readonly ILogger<AnticheatModule> _logger;
-    private readonly IConVar                  _autokick;
-    private readonly IConVar?                 _svCheats;
+    private readonly IModSharp               _modSharp;
+    private readonly IHookManager            _hookManager;
+    private readonly IClientManager          _clientManager;
+    private readonly ILogger<KreedzAnticheat> _logger;
+    private readonly IConVar                 _autokick;
+    private readonly IConVar?                _svCheats;
 
     private readonly bool[]  _wasGround  = new bool[PlayerSlot.MaxPlayerCount];
     private readonly float[] _groundTime = new float[PlayerSlot.MaxPlayerCount];
     private readonly int[]   _perfChain  = new int[PlayerSlot.MaxPlayerCount];
 
-    public AnticheatModule(InterfaceBridge bridge, ILogger<AnticheatModule> logger)
+    public string DisplayName   => "[Kreedz] Anticheat";
+    public string DisplayAuthor => "yappershq";
+
+    public KreedzAnticheat(ISharedSystem shared, string? dllPath, string? sharpPath, Version? version, IConfiguration? coreConfiguration, bool hotReload)
     {
-        _bridge   = bridge;
-        _logger   = logger;
-        _autokick = bridge.ConVarManager.CreateConVar("kz_ac_autokick", false)!;
-        _svCheats = bridge.ConVarManager.FindConVar("sv_cheats");
+        _modSharp      = shared.GetModSharp();
+        _hookManager   = shared.GetHookManager();
+        _clientManager = shared.GetClientManager();
+        _logger        = shared.GetLoggerFactory().CreateLogger<KreedzAnticheat>();
+
+        var cvar = shared.GetConVarManager();
+        _autokick = cvar.CreateConVar("kz_ac_autokick", false,
+            "Anticheat kicks flagged players instead of warning.")!;
+        _svCheats = cvar.FindConVar("sv_cheats");
     }
 
     public bool Init()
     {
-        _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
-        _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _hookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
+        _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         return true;
     }
 
     public void Shutdown()
     {
-        _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
-        _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _hookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+        _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
     }
 
     private void OnProcessMovePre(IPlayerProcessMoveForwardParams arg)
@@ -97,7 +111,7 @@ internal sealed class AnticheatModule : IModule, IAnticheatModule
         if (client.IsFakeClient) return;
 
         // Client cvars replicate shortly after spawn — check next frame.
-        _bridge.ModSharp.InvokeFrameAction(() => CheckClient(client));
+        _modSharp.InvokeFrameAction(() => CheckClient(client));
     }
 
     private void CheckClient(IGameClient client)
@@ -113,7 +127,7 @@ internal sealed class AnticheatModule : IModule, IAnticheatModule
     {
         _logger.LogWarning("[KZ.AC] {Name} ({Sid}) flagged: {Reason}", client.Name, client.SteamId, reason);
         if (_autokick.GetBool())
-            _bridge.ClientManager.KickClient(client, $"KZ: {reason}");
+            _clientManager.KickClient(client, $"KZ: {reason}");
         else
             client.Print(HudPrintChannel.Chat, $"[KZ] Anticheat flagged: {reason}.");
     }

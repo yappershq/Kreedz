@@ -72,8 +72,7 @@ internal static class ModuleDI
         // KZ port: KZ run semantics (Pro/Standard from teleport count) on the timer (cs2kz src/kz/timer).
         services.ImplSingleton<IKzTimerModule, IModule, KzTimerModule>();
 
-        // KZ port: anticheat — invalid client-cvar detector (cs2kz src/kz/anticheat).
-        services.ImplSingleton<IAnticheatModule, IModule, AnticheatModule>();
+        // KZ port: anticheat now ships as the external Kreedz.Anticheat plugin (ISharedSystem-only, no Core deps).
 
         // KZ port: rotating tips (cs2kz src/kz/tip).
         services.ImplSingleton<ITipModule, IModule, TipModule>();
