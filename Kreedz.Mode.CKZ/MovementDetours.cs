@@ -42,8 +42,17 @@ internal sealed unsafe class MovementDetours
     private const string Ns = "CCSPlayer_MovementServices::";
 
     // cs2kz kz_mode_ckz.h — rampbug/slopefix constants.
-    private const float RampBugThreshold = 0.98f;
-    private const float Epsilon          = 0.00001f;
+    private const float RampBugThreshold   = 0.98f;   // RAMP_BUG_THRESHOLD
+    private const float RampPierceDistance = 0.0625f; // RAMP_PIERCE_DISTANCE
+    private const float NewRampThreshold   = 0.95f;   // NEW_RAMP_THRESHOLD
+    private const int   MaxBumps           = 4;       // MAX_BUMPS
+    private const float Epsilon            = 0.00001f;
+    private const float FltEpsilon         = 1.192092896e-07f;
+
+    /// <summary>The full TryPlayerMove slopefix reimplementation — off by default (`kz_ckz_tpm`). Its
+    /// result is applied only when a rampbug is actually detected, so the blast radius is bounded to
+    /// rampbug cases; still EXPERIMENTAL until demo-validated.</summary>
+    public bool TpmEnabled { get; set; }
 
     private readonly IHookManager             _hookManager;
     private readonly IPhysicsQueryManager     _physics;
@@ -213,7 +222,184 @@ internal sealed unsafe class MovementDetours
 
     [UnmanagedCallersOnly] // CKZ: rampbug/slopefix
     private static void Hk_TryPlayerMove(nint ms, nint mv, nint firstDest, nint firstTrace, nint blocked)
-        => ((delegate* unmanaged<nint, nint, nint, nint, nint, void>)_tTryPlayerMove)(ms, mv, firstDest, firstTrace, blocked);
+    {
+        // Capture pre-move state, run the engine move (default result), then our slopefix — which only
+        // overwrites the result when it actually detects+fixes a rampbug (bounded blast radius).
+        Vector startOrigin = default, startVel = default;
+        var run = _self is { TpmEnabled: true } d && d._slotByMs.ContainsKey(ms);
+        if (run) { ref var pm = ref Move(mv); startOrigin = pm.AbsOrigin; startVel = pm.Velocity; }
+
+        ((delegate* unmanaged<nint, nint, nint, nint, nint, void>)_tTryPlayerMove)(ms, mv, firstDest, firstTrace, blocked);
+
+        if (run) _self!.TryPlayerMoveFix(ms, mv, startOrigin, startVel);
+    }
+
+    // cs2kz KZClassicModeService::OnTryPlayerMove — the slopefix collision reimplementation. Faithfully
+    // transcribed from source (the MAX_BUMPS bump loop + the 3x3x3 offset pierce search that detects and
+    // corrects rampbugs). overrideTPM is set only when a rampbug is found; only then do we write the
+    // computed origin/velocity back, so normal moves pass through the engine untouched. EXPERIMENTAL.
+    private void TryPlayerMoveFix(nint ms, nint mv, Vector start, Vector velocity)
+    {
+        if (!_slotByMs.TryGetValue(ms, out var slot)) return;
+        if (Len(velocity) == 0.0f) return;
+
+        var (mins, maxs) = Hull();
+        var plane        = _lastPlane[slot];
+        var primal       = velocity;
+        var frametime    = FrameTime();
+
+        var timeLeft   = frametime;
+        var allFraction = 0f;
+        var planes      = new Vector[5];
+        var numPlanes   = 0;
+        var overrideTPM = false;
+        var potentiallyStuck = false;
+        (float Frac, Vector Normal, Vector End, bool Solid) pm = default;
+
+        for (var bump = 0; bump < MaxBumps; bump++)
+        {
+            var end = start + velocity * timeLeft;
+            pm = Trace(mins, maxs, start, end);
+            if (end == start) continue;
+            if (IsValidMovementTrace(pm, mins, maxs) && pm.Frac == 1.0f) break;
+
+            var normalChanged = Dot(pm.Normal, plane) < RampBugThreshold;
+            var stuck         = potentiallyStuck && pm.Frac == 0.0f;
+            var lastWasWall   = plane.Z < 0.03125f;
+            var consider      = (normalChanged && !lastWasWall) || stuck;
+
+            if (Len(plane) > FltEpsilon && consider)
+            {
+                var offsets = new[] { 0.0f, -1.0f, 1.0f };
+                var success = false;
+                for (var i = 0; i < 3 && !success; i++)
+                for (var j = 0; j < 3 && !success; j++)
+                for (var k = 0; k < 3 && !success; k++)
+                {
+                    Vector offDir;
+                    if (i == 0 && j == 0 && k == 0) offDir = plane;
+                    else
+                    {
+                        offDir = new Vector(offsets[i], offsets[j], offsets[k]);
+                        if (Dot(plane, offDir) <= 0.0f) continue;
+                        var test0 = Trace(mins, maxs, start + offDir * RampPierceDistance, start);
+                        if (!IsValidMovementTrace(test0, mins, maxs)) continue;
+                    }
+
+                    var good = false; var hitNew = false; var validPlane = false;
+                    (float Frac, Vector Normal, Vector End, bool Solid) pierce = default;
+                    for (var ratio = 0.25f; ratio <= 1.0f; ratio += 0.25f)
+                    {
+                        pierce = Trace(mins, maxs, start + offDir * RampPierceDistance * ratio, end + offDir * RampPierceDistance * ratio);
+                        if (!IsValidMovementTrace(pierce, mins, maxs)) continue;
+                        validPlane = pierce.Frac < 1.0f && pierce.Frac > 0.1f && Dot(pierce.Normal, plane) >= RampBugThreshold;
+                        hitNew     = Dot(pm.Normal, pierce.Normal) < NewRampThreshold && Dot(plane, pierce.Normal) > NewRampThreshold;
+                        good       = MathF.Abs(pierce.Frac - 1.0f) < FltEpsilon || validPlane;
+                        if (good) break;
+                    }
+
+                    if (good || hitNew)
+                    {
+                        var test = Trace(mins, maxs, pierce.End, end);
+                        var denom = Len(end - start);
+                        var frac  = denom > 0f ? Math.Clamp(Len(pierce.End - start) / denom, 0.0f, 1.0f) : 0f;
+                        var normal = Len(pierce.Normal) > 0.0f ? pierce.Normal : test.Normal;
+                        pm = (frac, normal, test.End, pm.Solid);
+                        _lastPlane[slot] = normal;
+                        plane = normal;
+                        success = true;
+                        overrideTPM = true;
+                    }
+                }
+            }
+
+            if (Len(pm.Normal) > 0.99f) _lastPlane[slot] = pm.Normal;
+            potentiallyStuck = pm.Frac == 0.0f;
+
+            if (pm.Frac * Len(velocity) > 0.03125f || pm.Frac > 0.03125f)
+            {
+                allFraction += pm.Frac;
+                start = pm.End;
+                numPlanes = 0;
+            }
+
+            if (allFraction == 1.0f) break;
+            timeLeft -= frametime * pm.Frac;
+
+            if (numPlanes >= 5 || (pm.Normal.Z >= 0.7f && Len2D(velocity) < 1.0f)) { velocity = default; break; }
+
+            planes[numPlanes++] = pm.Normal;
+
+            if (numPlanes == 1) // (cs2kz also checks WALK + no ground entity; approximated as air-clip)
+            {
+                velocity = ClipVelocity(velocity, planes[0]);
+            }
+            else
+            {
+                int i, j;
+                for (i = 0; i < numPlanes; i++)
+                {
+                    velocity = ClipVelocity(velocity, planes[i]);
+                    for (j = 0; j < numPlanes; j++)
+                        if (j != i && Dot(velocity, planes[j]) < 0) break;
+                    if (j == numPlanes) break;
+                }
+
+                if (i == numPlanes)
+                {
+                    if (numPlanes != 2) { velocity = default; break; }
+                    var cd = Normalize(Cross(planes[0], planes[1]));
+                    velocity = cd * Dot(cd, velocity);
+                    if (Dot(velocity, primal) <= 0) { velocity = default; break; }
+                }
+            }
+        }
+
+        // Apply only when a rampbug was detected+fixed — otherwise the engine's result stands.
+        if (overrideTPM)
+        {
+            ref var md = ref Move(mv);
+            md.AbsOrigin = pm.End;
+            md.Velocity  = velocity;
+        }
+    }
+
+    // cs2kz ClipVelocity (1:1 with CS2): reflect velocity off a plane with the 0.03125 overbounce.
+    private static Vector ClipVelocity(Vector inV, Vector normal)
+    {
+        var backoff = -(inV.X * normal.X + normal.Z * inV.Z + inV.Y * normal.Y);
+        backoff = MathF.Max(backoff, 0.0f) + 0.03125f;
+        return normal * backoff + inV;
+    }
+
+    // cs2kz IsValidMovementTrace — reject start-in-solid, degenerate/deformed normals, and stuck spots.
+    private bool IsValidMovementTrace((float Frac, Vector Normal, Vector End, bool Solid) tr, Vector mins, Vector maxs)
+    {
+        if (tr.Solid) return false;
+        if (tr.Frac < 1.0f && MathF.Abs(tr.Normal.X) < FltEpsilon && MathF.Abs(tr.Normal.Y) < FltEpsilon && MathF.Abs(tr.Normal.Z) < FltEpsilon) return false;
+        if (MathF.Abs(tr.Normal.X) > 1.0f || MathF.Abs(tr.Normal.Y) > 1.0f || MathF.Abs(tr.Normal.Z) > 1.0f) return false;
+
+        // Unswept trace at the end point to confirm we're not embedded (cs2kz's stuck check). The extra
+        // backward trace cs2kz does is skipped here (it's a secondary check + partly commented out upstream).
+        var stuck = Trace(mins, maxs, tr.End, tr.End);
+        return !stuck.Solid && stuck.Frac >= 1.0f - FltEpsilon;
+    }
+
+    // General hull trace start->end, values only (no ref-struct escape).
+    private (float Frac, Vector Normal, Vector End, bool Solid) Trace(Vector mins, Vector maxs, Vector start, Vector end)
+    {
+        var query = RnQueryShapeAttr.PlayerMovement(InteractionLayers.Solid);
+        var t = _physics.TraceShapePlayerMovement(new TraceShapeRay(new TraceShapeHull { Mins = mins, Maxs = maxs }), start, end, in query);
+        return (t.Fraction, t.PlaneNormal, t.EndPosition, t.StartInSolid);
+    }
+
+    private static float FrameTime() => 1f / 64f; // fallback tick (validated pass reads the engine globals)
+
+    private static float Len(Vector v)   => MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+    private static float Len2D(Vector v) => MathF.Sqrt(v.X * v.X + v.Y * v.Y);
+    private static Vector Normalize(Vector v) { var l = Len(v); return l > 0f ? new Vector(v.X / l, v.Y / l, v.Z / l) : default; }
+    private static Vector Cross(Vector a, Vector b)
+        => new(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
 
     [UnmanagedCallersOnly]
     private static void Hk_CategorizePosition(nint ms, nint mv, byte stayOnGround)

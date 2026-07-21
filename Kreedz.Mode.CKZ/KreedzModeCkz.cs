@@ -52,6 +52,7 @@ public sealed class KreedzModeCkz : IModSharpModule
     private readonly ILogger<KreedzModeCkz> _logger;
 
     private readonly IConVar?        _nativeHooks;
+    private readonly IConVar?        _tpm;
     private readonly MovementDetours _detours;
 
     private IKzModeRegistry? _registry;
@@ -89,6 +90,8 @@ public sealed class KreedzModeCkz : IModSharpModule
         _modSharp.GetGameData().Register("kreedz-ckz.games");
         _nativeHooks = shared.GetConVarManager().CreateConVar("kz_ckz_native_hooks", true,
             "Enable the native CKZ movement detours (bit-exact path). Set 0 if a sig breaks after a CS2 update.");
+        _tpm = shared.GetConVarManager().CreateConVar("kz_ckz_tpm", false,
+            "Enable the experimental TryPlayerMove slopefix reimplementation. Default 0 — validate against demos before enabling.");
         _detours = new MovementDetours(_hookManager, shared.GetPhysicsQueryManager(), _modSharp.GetGameData(), _logger);
 
         for (var i = 0; i < _angleHistory.Length; i++)
@@ -105,6 +108,8 @@ public sealed class KreedzModeCkz : IModSharpModule
             try { _detours.Install(); }
             catch (System.Exception e) { _logger.LogError(e, "[CKZ] native detour install failed — set kz_ckz_native_hooks 0"); }
         }
+
+        _detours.TpmEnabled = _tpm?.GetBool() == true;
 
         return true;
     }
