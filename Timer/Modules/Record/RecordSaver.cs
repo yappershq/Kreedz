@@ -28,6 +28,7 @@ using Source2Surf.Timer.Shared.Interfaces;
 using Source2Surf.Timer.Shared.Interfaces.Listeners;
 using Source2Surf.Timer.Shared.Models;
 using Source2Surf.Timer.Shared.Models.Timer;
+using Source2Surf.Timer.Modules;
 
 namespace Source2Surf.Timer.Modules.Record;
 
@@ -36,6 +37,7 @@ internal sealed class RecordSaver
     private readonly InterfaceBridge                    _bridge;
     private readonly IRequestManager                    _request;
     private readonly IStyleModule                       _styleModule;
+    private readonly ICheckpointModule                  _checkpoint;
     private readonly MapRecordCache                     _mapCache;
     private readonly PlayerRecordCache                  _playerCache;
     private readonly ListenerHub<IRecordModuleListener> _listenerHub;
@@ -44,6 +46,7 @@ internal sealed class RecordSaver
     public RecordSaver(InterfaceBridge                    bridge,
                        IRequestManager                    request,
                        IStyleModule                       styleModule,
+                       ICheckpointModule                  checkpoint,
                        MapRecordCache                     mapCache,
                        PlayerRecordCache                  playerCache,
                        ListenerHub<IRecordModuleListener> listenerHub,
@@ -52,13 +55,14 @@ internal sealed class RecordSaver
         _bridge      = bridge;
         _request     = request;
         _styleModule = styleModule;
+        _checkpoint  = checkpoint;
         _mapCache    = mapCache;
         _playerCache = playerCache;
         _listenerHub = listenerHub;
         _logger      = logger;
     }
 
-    public static RecordRequest CreateRecordRequest(ITimerInfo timerInfo, IStyleModule styleModule)
+    public static RecordRequest CreateRecordRequest(ITimerInfo timerInfo, IStyleModule styleModule, int teleports = 0)
     {
         var styleSetting = styleModule.GetStyleSetting(timerInfo.Style);
 
@@ -71,6 +75,7 @@ internal sealed class RecordSaver
             Jumps       = timerInfo.Jumps,
             Strafes     = timerInfo.Strafes,
             Sync        = timerInfo.Sync,
+            Teleports   = teleports,
             StyleFactor = styleSetting.ScoreFactor,
         };
 
@@ -109,7 +114,7 @@ internal sealed class RecordSaver
         var wrRecord = records.Count > 0 ? records[0] : null;
         var pbRecord = _playerCache.GetRecord(slot, style, track);
 
-        var recordRequest = CreateRecordRequest(timerInfo, _styleModule);
+        var recordRequest = CreateRecordRequest(timerInfo, _styleModule, _checkpoint.GetTeleportCount(slot));
 
         return Task.Run(async () =>
                         {
@@ -197,7 +202,7 @@ internal sealed class RecordSaver
         var wrRecord     = stageRecords is { Count: > 0 } ? stageRecords[0] : null;
         var pbRecord     = _playerCache.GetRecord(slot, style, track, stage);
 
-        var recordRequest = CreateRecordRequest(timerInfo, _styleModule);
+        var recordRequest = CreateRecordRequest(timerInfo, _styleModule, _checkpoint.GetTeleportCount(slot));
         recordRequest.Stage = timerInfo.Stage;
 
         return Task.Run(async () =>

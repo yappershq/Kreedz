@@ -33,6 +33,9 @@ public class RecordRequest : IComparable<RecordRequest>
     public int   Strafes { get; set; }
     public float Sync    { get; set; }
 
+    /// <summary>KZ: teleports used this run. 0 = PRO, ≥1 = STANDARD.</summary>
+    public int   Teleports { get; set; }
+
     public float VelocityStartX { get; set; }
     public float VelocityStartY { get; set; }
     public float VelocityStartZ { get; set; }

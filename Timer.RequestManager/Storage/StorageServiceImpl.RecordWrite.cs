@@ -268,6 +268,7 @@ internal sealed partial class StorageServiceImpl
             Jumps          = ToUInt32(request.Jumps),
             Strafes        = ToUInt32(request.Strafes),
             Sync           = request.Sync,
+            Teleports      = ToUInt16(request.Teleports),
             VelocityStartX = request.VelocityStartX,
             VelocityStartY = request.VelocityStartY,
             VelocityStartZ = request.VelocityStartZ,

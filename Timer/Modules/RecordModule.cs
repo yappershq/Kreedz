@@ -92,6 +92,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
     public RecordModule(InterfaceBridge       bridge,
                         ITimerModule          timerModule,
                         IStyleModule          styleModule,
+                        ICheckpointModule     checkpointModule,
                         IPlayerManager        playerManager,
                         IRequestManager       request,
                         ICommandManager       commandManager,
@@ -110,7 +111,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
         _listenerHub = new ListenerHub<IRecordModuleListener>(logger);
         _mapCache    = new MapRecordCache(logger);
         _playerCache = new PlayerRecordCache(logger);
-        _saver       = new RecordSaver(bridge, request, styleModule, _mapCache, _playerCache, _listenerHub, logger);
+        _saver       = new RecordSaver(bridge, request, styleModule, checkpointModule, _mapCache, _playerCache, _listenerHub, logger);
         _taskTracker = new TaskTracker(logger);
     }
 

@@ -73,6 +73,9 @@ internal sealed class RunEntity : BaseSteamIdSerialEntity
     public uint     Strafes { get; set; }
     public float    Sync    { get; set; }
 
+    /// <summary>KZ: teleports used this run. 0 = PRO, ≥1 = STANDARD. (CodeFirst adds it in-place.)</summary>
+    public ushort   Teleports { get; set; }
+
     public float VelocityStartX { get; set; }
     public float VelocityStartY { get; set; }
     public float VelocityStartZ { get; set; }
