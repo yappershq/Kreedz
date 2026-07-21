@@ -75,5 +75,8 @@ internal static class ModuleDI
 
         // KZ port: rotating tips (cs2kz src/kz/tip).
         services.ImplSingleton<ITipModule, IModule, TipModule>();
+
+        // KZ port: ban management — !ban/!unban admin commands + connect-time kick (cs2kz src/kz/ban).
+        services.ImplSingleton<IBanModule, IModule, BanModule>();
     }
 }

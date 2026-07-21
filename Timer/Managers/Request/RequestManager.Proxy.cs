@@ -232,4 +232,17 @@ internal sealed class RequestManagerProxy : IManager, IRequestManager
 
     public Task<(float playTime, int playCount)> GetPlayerMapStatsAsync(SteamID steamId, string mapName)
         => Current.GetPlayerMapStatsAsync(steamId, mapName);
+
+    #region Ban
+
+    public Task AddBanAsync(SteamID steamId, string? reason, DateTime expiresAt)
+        => Current.AddBanAsync(steamId, reason, expiresAt);
+
+    public Task<int> RemoveBansAsync(SteamID steamId)
+        => Current.RemoveBansAsync(steamId);
+
+    public Task<BanRecord?> GetActiveBanAsync(SteamID steamId)
+        => Current.GetActiveBanAsync(steamId);
+
+    #endregion
 }

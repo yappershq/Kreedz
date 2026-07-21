@@ -15,6 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Sharp.Shared.Units;
@@ -117,6 +118,20 @@ public interface IRequestManager
     /// Deletes all custom zones for the specified map.
     /// </summary>
     Task DeleteZonesAsync(string mapName);
+
+#endregion
+
+#region Ban
+
+    /// <summary>Ban a player from ranking (they are also kicked on connect). <paramref name="expiresAt"/>
+    /// in the past or now = already-expired (no-op ban); use DateTime.MaxValue for a permanent ban.</summary>
+    Task AddBanAsync(SteamID steamId, string? reason, DateTime expiresAt);
+
+    /// <summary>Remove all bans (active or expired) for a player. Returns the number removed.</summary>
+    Task<int> RemoveBansAsync(SteamID steamId);
+
+    /// <summary>The player's active (unexpired) ban, or null. If several exist, the latest-expiring one.</summary>
+    Task<BanRecord?> GetActiveBanAsync(SteamID steamId);
 
 #endregion
 

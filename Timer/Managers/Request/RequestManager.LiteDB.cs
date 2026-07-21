@@ -47,6 +47,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
     private const string MapTableName  = "maps";
     private const string UserTableName = "users";
     private const string ZoneTableName = "zones";
+    private const string BanTableName  = "kz_bans";
 
     static RequestManagerLiteDB()
     {
@@ -59,6 +60,9 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
               .Id(x => x.Id);
 
         mapper.Entity<PlayerProfile>()
+              .Id(x => x.Id);
+
+        mapper.Entity<BanRecord>()
               .Id(x => x.Id);
     }
 
@@ -111,6 +115,46 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
 
         var zoneCol = Database.GetCollection<ZoneDocument>(ZoneTableName);
         zoneCol.EnsureIndex(x => x.MapName);
+
+        var banCol = Database.GetCollection<BanRecord>(BanTableName);
+        banCol.EnsureIndex(x => x.SteamId);
+    }
+
+    public Task AddBanAsync(SteamID steamId, string? reason, DateTime expiresAt)
+    {
+        var ban = new BanRecord
+        {
+            Id        = Guid.NewGuid().ToString(),
+            SteamId   = steamId.AsPrimitive(),
+            Reason    = reason,
+            ExpiresAt = expiresAt,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        Database.GetCollection<BanRecord>(BanTableName).Insert(ban);
+
+        return Task.CompletedTask;
+    }
+
+    public Task<int> RemoveBansAsync(SteamID steamId)
+    {
+        var value = steamId.AsPrimitive();
+        var count = Database.GetCollection<BanRecord>(BanTableName).DeleteMany(b => b.SteamId == value);
+
+        return Task.FromResult(count);
+    }
+
+    public Task<BanRecord?> GetActiveBanAsync(SteamID steamId)
+    {
+        var value = steamId.AsPrimitive();
+        var now   = DateTime.UtcNow;
+
+        var ban = Database.GetCollection<BanRecord>(BanTableName)
+                          .Find(b => b.SteamId == value && b.ExpiresAt > now)
+                          .OrderByDescending(b => b.ExpiresAt)
+                          .FirstOrDefault();
+
+        return Task.FromResult<BanRecord?>(ban);
     }
 
     public Task<MapProfile> GetMapInfo(string map)
