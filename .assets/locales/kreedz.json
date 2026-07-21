@@ -17,5 +17,11 @@
 
   "Kreedz_Pistol_Usage":   { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!pistol <{0}>{{default}}." },
   "Kreedz_Pistol_Unknown": { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown pistol '{0}'." },
-  "Kreedz_Pistol_Set":     { "en-US": " {{green}}[KZ]{{default}} Pistol set to {{lime}}{0}{{default}}." }
+  "Kreedz_Pistol_Set":     { "en-US": " {{green}}[KZ]{{default}} Pistol set to {{lime}}{0}{{default}}." },
+
+  "Kreedz_Style_List":     { "en-US": " {{green}}[KZ]{{default}} Active styles: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!style <name>{{default}}." },
+  "Kreedz_Style_Unknown":  { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown style '{0}'." },
+  "Kreedz_Style_Enabled":  { "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} enabled." },
+  "Kreedz_Style_Disabled": { "en-US": " {{green}}[KZ]{{default}} Style {{lime}}{0}{{default}} disabled." },
+  "Kreedz_Style_Cleared":  { "en-US": " {{green}}[KZ]{{default}} Styles cleared." }
 }

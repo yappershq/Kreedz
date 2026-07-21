@@ -116,7 +116,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
         if (Arg(command) is not { } id)
         {
             var active = _active[slot].Count == 0 ? "none" : string.Join(", ", _active[slot]);
-            Tell(slot, $"Active styles: {active}. Available: {string.Join(", ", _styles.Values.Select(s => s.ShortName))}. Use !style <name>.");
+            Msg(slot, "Kreedz_Style_List", active, string.Join(", ", _styles.Values.Select(s => s.ShortName)));
             return;
         }
 
@@ -127,7 +127,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
     {
         if (id is null || !_styles.TryGetValue(id, out var style))
         {
-            Tell(slot, $"Unknown style '{id}'.");
+            Msg(slot, "Kreedz_Style_Unknown", id);
             return;
         }
 
@@ -136,7 +136,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
 
         Persist(slot);
         ReapplyAll(slot);
-        Tell(slot, enable ? $"Style {style.Name} enabled." : $"Style {style.Name} disabled.");
+        Msg(slot, enable ? "Kreedz_Style_Enabled" : "Kreedz_Style_Disabled", style.Name);
     }
 
     private void ClearStyles(PlayerSlot slot)
@@ -144,7 +144,7 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
         _active[slot].Clear();
         Persist(slot);
         ReapplyAll(slot);
-        Tell(slot, "Styles cleared.");
+        Msg(slot, "Kreedz_Style_Cleared");
     }
 
     /// <summary>Revert to the mode base, then re-apply the active style stack on top (last-wins).</summary>
@@ -159,9 +159,9 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
                     _bridge.ConVarManager.FindConVar(name)?.ReplicateToClient(client, value);
     }
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }
