@@ -24,7 +24,8 @@ using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Jumpstats;
 
-public enum JumpType { LongJump, Bhop }
+// cs2kz JumpType (the classifiable subset from managed per-tick data).
+public enum JumpType { LongJump, Bhop, MultiBhop, WeirdJump, LadderJump, Ladderhop, Fall, Other }
 
 public enum DistanceTier { None, Meh, Impressive, Perfect, Godlike, Ownage, Wrecker }
 
@@ -57,6 +58,12 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly float[] _lastSpeed    = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _lastYaw      = new float[PlayerSlot.MaxPlayerCount];
     private readonly int[]   _lastYawDir   = new int[PlayerSlot.MaxPlayerCount];
+
+    // Jump-type classification state.
+    private readonly JumpType[] _prevType    = new JumpType[PlayerSlot.MaxPlayerCount];
+    private readonly int[]      _ladderTicks = new int[PlayerSlot.MaxPlayerCount]; // ticks since on a ladder
+    private const float JumpImpulseZ = 150f; // takeoff vz above this = a real jump (vs walking off = fall)
+    private const int   LadderWindow = 4;    // takeoff within N ticks of a ladder = ladder jump/hop
 
     public string DisplayName   => "[Kreedz] Jumpstats";
     public string DisplayAuthor => "yappershq";
@@ -97,12 +104,16 @@ public sealed class KreedzJumpstats : IModSharpModule
         var horiz = MathF.Sqrt(vel.X * vel.X + vel.Y * vel.Y);
         var yaw   = pawn.GetEyeAngles().Y;
 
+        var onLadder = pawn.ActualMoveType is MoveType.Ladder;
+        _ladderTicks[slot] = onLadder ? 0 : _ladderTicks[slot] + 1;
+
         if (_wasOnGround[slot] && !onGround)
         {
-            // Takeoff — reset accumulators.
+            // Takeoff — classify the jump + reset accumulators.
             _takeoff[slot]       = origin;
-            _type[slot]          = _groundTicks[slot] <= PerfTicks ? JumpType.Bhop : JumpType.LongJump;
-            _tracking[slot]      = pawn.ActualMoveType is MoveType.Walk; // ignore noclip/ladder starts
+            _type[slot]          = Classify(slot, vel.Z, _ladderTicks[slot] <= LadderWindow);
+            _prevType[slot]      = _type[slot];
+            _tracking[slot]      = pawn.ActualMoveType is MoveType.Walk; // ignore noclip starts
             _takeoffSpeed[slot]  = horiz;
             _maxSpeed[slot]      = horiz;
             _maxHeight[slot]     = 0f;
@@ -146,12 +157,45 @@ public sealed class KreedzJumpstats : IModSharpModule
         _wasOnGround[slot] = onGround;
     }
 
+    // cs2kz KZJumpstatsService::DetermineJumpType (the subset classifiable from managed per-tick data):
+    // jumped-vs-fell from takeoff vz, ladder recency, and the previous jump's type for bhop chaining.
+    private JumpType Classify(PlayerSlot slot, float takeoffVz, bool fromLadder)
+    {
+        var jumped = takeoffVz > JumpImpulseZ;
+        if (fromLadder) return jumped ? JumpType.Ladderhop : JumpType.LadderJump;
+        if (!jumped)    return JumpType.Fall;
+
+        if (_groundTicks[slot] <= PerfTicks) // took off within the perf window → a bhop of some kind
+            return _prevType[slot] switch
+            {
+                JumpType.Fall                       => JumpType.WeirdJump,
+                JumpType.LongJump                   => JumpType.Bhop,
+                JumpType.Bhop or JumpType.MultiBhop => JumpType.MultiBhop,
+                _                                   => JumpType.Other,
+            };
+
+        return JumpType.LongJump;
+    }
+
+    private static string Label(JumpType t) => t switch
+    {
+        JumpType.LongJump   => "LJ",
+        JumpType.Bhop       => "BH",
+        JumpType.MultiBhop  => "MBH",
+        JumpType.WeirdJump  => "WJ",
+        JumpType.LadderJump => "LAJ",
+        JumpType.Ladderhop  => "LAH",
+        _                   => "JUMP",
+    };
+
     private void Report(PlayerSlot slot, JumpType type, float distance)
     {
+        if (type is JumpType.Fall or JumpType.Other) return; // not a scored jump
+
         var tier = Tier(distance);
         if (tier == DistanceTier.None) return;
 
-        var label   = type == JumpType.Bhop ? "BH" : "LJ";
+        var label   = Label(type);
         var sync    = _airTicks[slot] > 0 ? 100f * _gainTicks[slot] / _airTicks[slot] : 0f;
         var gain    = _maxSpeed[slot] - _takeoffSpeed[slot];
 
