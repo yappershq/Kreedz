@@ -34,8 +34,7 @@ internal static class ModuleDI
         services.ImplSingleton<IReplayPlaybackModule, IModule, ReplayPlaybackModule>();
         services.AddSingleton<IReplayModule>(x => x.GetRequiredService<ReplayPlaybackModule>());
         services.ImplSingleton<IReplayRecorderModule, IModule, ReplayRecorderModule>();
-        // KZ port: KZ HUD (speed/keys/mode/tp) replaces the surf HUD (cs2kz src/kz/hud).
-        services.ImplSingleton<IHudModule, IModule, KzHudModule>();
+        // KZ port: the HUD now ships as the external Kreedz.Hud plugin (reads IKzRunService + IKzModeRegistry).
 
         // KZ port: CKZ movement now ships as the external Kreedz.Mode.CKZ plugin (registers via IKzModeRegistry).
         services.ImplSingleton<IMessageModule, IModule, MessageModule>();

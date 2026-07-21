@@ -1,47 +1,55 @@
 /*
- * yappershq/Timer (KZ) — CS2KZ port
+ * yappershq/Kreedz (KZ) — HUD plugin (cs2kz src/kz/hud)
  *
- * KZ HUD (1:1 cs2kz src/kz/hud): a center-panel run timer + speedometer + keys (W A S D C J) + mode +
- * teleport counter, rendered per-tick via the `show_survival_respawn_status` center-HTML event with the
- * MS flash-fix (patch gameRules.IsGameRestart each frame so the panel isn't cleared). Replaces the
- * surf HUD in the KZ build. PB-delta needs a per-player cached PB (async DB — folds in with the record
- * cache); spectator/replay HUD is a follow-up. This is the always-on KZ run+movement HUD.
+ * A standalone ModSharp module (split out of Core). Renders the center-panel run timer + speedometer +
+ * keys (W A S D C J) + mode + CP/TP counters per-tick via the `show_survival_respawn_status` center-HTML
+ * event with the MS flash-fix. Reads run state through the public IKzRunService + IKzModeRegistry, so it
+ * needs no Core-internal services — a server can swap or omit it. PB-delta awaits a cached-PB source.
  */
 
 using System;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
+using Kreedz.Shared.Interfaces;
 using Kreedz.Shared.Models.Timer;
 
-namespace Kreedz.Modules;
+namespace Kreedz.Hud;
 
-internal sealed class KzHudModule : IModule, IHudModule
+public sealed class KreedzHud : IModSharpModule
 {
     private const float UpdateInterval = 0.10f; // 10 Hz
 
-    private readonly InterfaceBridge      _bridge;
-    private readonly ICheckpointModule    _checkpoint;
-    private readonly IModeModule          _mode;
-    private readonly ITimerModule         _timer;
-    private readonly ILogger<KzHudModule> _logger;
+    private readonly ISharedSystem       _shared;
+    private readonly IModSharp           _modSharp;
+    private readonly IHookManager        _hookManager;
+    private readonly IClientManager      _clientManager;
+    private readonly ILogger<KreedzHud>  _logger;
 
     private readonly IGameEvent _hudEvent;
     private readonly float[]    _nextUpdate = new float[PlayerSlot.MaxPlayerCount];
 
-    public KzHudModule(InterfaceBridge bridge, ICheckpointModule checkpoint, IModeModule mode, ITimerModule timer, ILogger<KzHudModule> logger)
-    {
-        _bridge     = bridge;
-        _checkpoint = checkpoint;
-        _mode       = mode;
-        _timer      = timer;
-        _logger     = logger;
+    private IKzRunService?    _run;
+    private IKzModeRegistry?  _modes;
 
-        _hudEvent = bridge.EventManager.CreateEvent("show_survival_respawn_status", true)
+    public string DisplayName   => "[Kreedz] HUD";
+    public string DisplayAuthor => "yappershq";
+
+    public KreedzHud(ISharedSystem shared, string? dllPath, string? sharpPath, Version? version, IConfiguration? coreConfiguration, bool hotReload)
+    {
+        _shared        = shared;
+        _modSharp      = shared.GetModSharp();
+        _hookManager   = shared.GetHookManager();
+        _clientManager = shared.GetClientManager();
+        _logger        = shared.GetLoggerFactory().CreateLogger<KreedzHud>();
+
+        _hudEvent = shared.GetEventManager().CreateEvent("show_survival_respawn_status", true)
                     ?? throw new NullReferenceException("Failed to create KZ HUD event.");
         _hudEvent.SetInt("duration", 1);
         _hudEvent.SetInt("userid", -1);
@@ -49,24 +57,31 @@ internal sealed class KzHudModule : IModule, IHudModule
 
     public bool Init()
     {
-        _bridge.HookManager.PlayerRunCommand.InstallHookPost(OnRunCommandPost);
-        _bridge.ModSharp.InstallGameFrameHook(null, OnGameFramePost);
+        _hookManager.PlayerRunCommand.InstallHookPost(OnRunCommandPost);
+        _modSharp.InstallGameFrameHook(null, OnGameFramePost);
         return true;
+    }
+
+    public void OnAllModulesLoaded()
+    {
+        var mgr = _shared.GetSharpModuleManager();
+        _run   = mgr.GetOptionalSharpModuleInterface<IKzRunService>(IKzRunService.Identity)?.Instance;
+        _modes = mgr.GetOptionalSharpModuleInterface<IKzModeRegistry>(IKzModeRegistry.Identity)?.Instance;
     }
 
     public void Shutdown()
     {
-        _bridge.HookManager.PlayerRunCommand.RemoveHookPost(OnRunCommandPost);
-        _bridge.ModSharp.RemoveGameFrameHook(null, OnGameFramePost);
+        _hookManager.PlayerRunCommand.RemoveHookPost(OnRunCommandPost);
+        _modSharp.RemoveGameFrameHook(null, OnGameFramePost);
         _hudEvent.Dispose();
     }
 
     // Keep the center HTML panel from being cleared each frame (MS flash-fix).
     private void OnGameFramePost(bool a, bool b, bool c)
     {
-        var gr = _bridge.GameRules;
-        if (!gr.IsWarmupPeriod)
-            gr.IsGameRestart = gr.RestartRoundTime < _bridge.GlobalVars.CurTime;
+        var gr = _modSharp.GetGameRules();
+        if (gr.IsWarmupPeriod) return;
+        gr.IsGameRestart = gr.RestartRoundTime < _modSharp.GetGlobals().CurTime;
     }
 
     private void OnRunCommandPost(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
@@ -75,7 +90,7 @@ internal sealed class KzHudModule : IModule, IHudModule
         if (client.IsFakeClient) return;
 
         var slot = client.Slot;
-        var now  = _bridge.GlobalVars.CurTime;
+        var now  = _modSharp.GetGlobals().CurTime;
         if (now < _nextUpdate[slot]) return;
         _nextUpdate[slot] = now + UpdateInterval;
 
@@ -83,13 +98,12 @@ internal sealed class KzHudModule : IModule, IHudModule
 
         var speed = (int) MathF.Round(pawn.GetAbsVelocity().Length2D());
         var keys  = Keys(param.KeyButtons);
-        var tp    = _checkpoint.GetTeleportCount(slot);
-        var cp    = _checkpoint.GetCheckpointCount(slot);
-        var mode  = _mode.GetMode(slot).ToUpperInvariant();
+        var tp    = _run?.GetTeleportCount(slot)   ?? 0;
+        var cp    = _run?.GetCheckpointCount(slot) ?? 0;
+        var mode  = (_modes?.GetPlayerMode(slot) ?? "vnl").ToUpperInvariant();
 
-        // Run timer line — only while a run is active (Running/Paused); hidden when stopped.
         var timeLine = "";
-        if (_timer.GetTimerInfo(slot) is { Status: ETimerStatus.Running or ETimerStatus.Paused } info)
+        if (_run?.GetTimerInfo(slot) is { Status: ETimerStatus.Running or ETimerStatus.Paused } info)
         {
             var paused = info.Status == ETimerStatus.Paused ? " <font color='#ffd479'>⏸</font>" : "";
             timeLine = $"<font class='fontSize-l' color='#ffffff'>{FormatTime(info.Time)}</font>{paused}<br>";
