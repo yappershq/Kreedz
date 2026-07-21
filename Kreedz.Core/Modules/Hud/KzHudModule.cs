@@ -1,11 +1,11 @@
 /*
  * yappershq/Timer (KZ) — CS2KZ port
  *
- * KZ HUD (1:1 cs2kz src/kz/hud): a center-panel speedometer + keys (W A S D C J) + mode + teleport
- * counter, rendered per-tick via the `show_survival_respawn_status` center-HTML event with the
+ * KZ HUD (1:1 cs2kz src/kz/hud): a center-panel run timer + speedometer + keys (W A S D C J) + mode +
+ * teleport counter, rendered per-tick via the `show_survival_respawn_status` center-HTML event with the
  * MS flash-fix (patch gameRules.IsGameRestart each frame so the panel isn't cleared). Replaces the
- * surf HUD in the KZ build. Timer time/PB-delta + spectator/replay HUD reuse the surf HudModule's
- * pieces and get folded in as the timer HUD wiring lands; this is the always-on KZ movement HUD.
+ * surf HUD in the KZ build. PB-delta needs a per-player cached PB (async DB — folds in with the record
+ * cache); spectator/replay HUD is a follow-up. This is the always-on KZ run+movement HUD.
  */
 
 using System;
@@ -16,6 +16,7 @@ using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
+using Kreedz.Shared.Models.Timer;
 
 namespace Kreedz.Modules;
 
@@ -26,16 +27,18 @@ internal sealed class KzHudModule : IModule, IHudModule
     private readonly InterfaceBridge      _bridge;
     private readonly ICheckpointModule    _checkpoint;
     private readonly IModeModule          _mode;
+    private readonly ITimerModule         _timer;
     private readonly ILogger<KzHudModule> _logger;
 
     private readonly IGameEvent _hudEvent;
     private readonly float[]    _nextUpdate = new float[PlayerSlot.MaxPlayerCount];
 
-    public KzHudModule(InterfaceBridge bridge, ICheckpointModule checkpoint, IModeModule mode, ILogger<KzHudModule> logger)
+    public KzHudModule(InterfaceBridge bridge, ICheckpointModule checkpoint, IModeModule mode, ITimerModule timer, ILogger<KzHudModule> logger)
     {
         _bridge     = bridge;
         _checkpoint = checkpoint;
         _mode       = mode;
+        _timer      = timer;
         _logger     = logger;
 
         _hudEvent = bridge.EventManager.CreateEvent("show_survival_respawn_status", true)
@@ -83,12 +86,27 @@ internal sealed class KzHudModule : IModule, IHudModule
         var tp    = _checkpoint.GetTeleportCount(slot);
         var mode  = _mode.GetMode(slot).ToUpperInvariant();
 
-        var html = $"<font class='fontSize-l' color='#8effc1'>{speed}</font> <font class='fontSize-m' color='#c0cbd8'>u/s</font><br>" +
+        // Run timer line — only while a run is active (Running/Paused); hidden when stopped.
+        var timeLine = "";
+        if (_timer.GetTimerInfo(slot) is { Status: ETimerStatus.Running or ETimerStatus.Paused } info)
+        {
+            var paused = info.Status == ETimerStatus.Paused ? " <font color='#ffd479'>⏸</font>" : "";
+            timeLine = $"<font class='fontSize-l' color='#ffffff'>{FormatTime(info.Time)}</font>{paused}<br>";
+        }
+
+        var html = timeLine +
+                   $"<font class='fontSize-l' color='#8effc1'>{speed}</font> <font class='fontSize-m' color='#c0cbd8'>u/s</font><br>" +
                    $"<font class='fontSize-m' color='#9fb0c8'>{keys}</font><br>" +
                    $"<font class='fontSize-s' color='#7f8fa6'>{mode} · TP {tp}</font>";
 
         _hudEvent.SetString("loc_token", html);
         _hudEvent.FireToClient(client);
+    }
+
+    private static string FormatTime(float seconds)
+    {
+        var totalMs = (int) MathF.Round(seconds * 1000f);
+        return $"{totalMs / 60000:00}:{totalMs / 1000 % 60:00}.{totalMs % 1000:000}";
     }
 
     private static string Keys(UserCommandButtons b)
