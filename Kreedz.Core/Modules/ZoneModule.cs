@@ -222,10 +222,15 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
         if (!_zones.TryGetValue(entityHandle, out var info))
         {
-            // Not a timer zone — it may be a mapping-API teleport trigger; teleport the player on enter.
-            if (output == "onstarttouch"
-                && _mapApi.TryResolveTeleport(entity.GetAbsOrigin(), out var dest, out var resetSpeed))
-                pawn.Teleport(dest, pawn.GetEyeAngles(), resetSpeed ? new Vector() : pawn.GetAbsVelocity());
+            // Not a timer zone — it may be a mapping-API teleport or push trigger; apply on enter.
+            if (output == "onstarttouch")
+            {
+                var triggerOrigin = entity.GetAbsOrigin();
+                if (_mapApi.TryResolveTeleport(triggerOrigin, out var dest, out var resetSpeed))
+                    pawn.Teleport(dest, pawn.GetEyeAngles(), resetSpeed ? new Vector() : pawn.GetAbsVelocity());
+                else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
+                    pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse);
+            }
 
             return EHookAction.Ignored;
         }

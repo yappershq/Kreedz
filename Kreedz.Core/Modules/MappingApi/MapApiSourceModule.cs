@@ -40,6 +40,9 @@ internal interface IMapApiSource
     /// <summary>Resolve a spawned trigger_multiple to a mapping-API teleport destination (by origin). Returns
     /// false if it isn't a teleport trigger. resetSpeed = timer_teleport_reset_speed (zero velocity on teleport).</summary>
     bool TryResolveTeleport(Vector origin, out Vector destination, out bool resetSpeed);
+
+    /// <summary>Resolve a spawned trigger_multiple to a mapping-API push impulse (timer_push_amount) by origin.</summary>
+    bool TryResolvePush(Vector origin, out Vector impulse);
 }
 
 internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
@@ -51,7 +54,7 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         "classname", "targetname", "origin", "hammerUniqueId", "timer_trigger_type",
         "timer_zone_course_descriptor", "timer_zone_split_number", "timer_zone_checkpoint_number",
         "timer_zone_stage_number", "timer_course_number", "timer_course_name", "timer_course_disable_checkpoint",
-        "timer_teleport_destination", "timer_teleport_reset_speed",
+        "timer_teleport_destination", "timer_teleport_reset_speed", "timer_push_amount",
     ];
 
     private readonly InterfaceBridge             _bridge;
@@ -66,6 +69,10 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
     // Destinations are any named entity's origin (info_target / info_teleport_destination), resolved on touch.
     private readonly Dictionary<(int X, int Y, int Z), (string Dest, bool ResetSpeed)> _teleportsByOrigin = new();
     private readonly Dictionary<string, Vector> _destinations = new(StringComparer.OrdinalIgnoreCase);
+
+    // Push triggers (cs2kz KZTRIGGER_PUSH): trigger origin → impulse (timer_push_amount). Basic add-to-velocity
+    // on enter; the per-axis set-speed / condition / cooldown flags are refinements.
+    private readonly Dictionary<(int X, int Y, int Z), Vector> _pushesByOrigin = new();
 
     // A map loads through MULTIPLE CreateWorldInternal calls (main world + sub-worlds). Clear the accumulated
     // zones only when the map actually changes, else a later sub-world wipes the main world's zones before the
@@ -153,6 +160,7 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
             _zonesByOrigin.Clear();
             _teleportsByOrigin.Clear();
             _destinations.Clear();
+            _pushesByOrigin.Clear();
         }
 
         ref var lumpHandles = ref pSingleWorld->pWorld->EntityLumps;
@@ -211,6 +219,12 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                             _teleportsByOrigin[OriginKey(tpOrigin.X, tpOrigin.Y, tpOrigin.Z)] =
                                 (tpDest, ParseBool(dict.GetValueOrDefault("timer_teleport_reset_speed", "")));
                         }
+                        else if (type == KzTriggerType.Push
+                                 && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var pushOrigin)
+                                 && TryParseOrigin(dict.GetValueOrDefault("timer_push_amount", ""), out var impulse))
+                        {
+                            _pushesByOrigin[OriginKey(pushOrigin.X, pushOrigin.Y, pushOrigin.Z)] = impulse;
+                        }
                     }
                 }
             }
@@ -265,6 +279,9 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
 
         return false;
     }
+
+    public bool TryResolvePush(Vector origin, out Vector impulse)
+        => _pushesByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out impulse);
 
     private static bool ParseBool(string s) => s is "1" || s.Equals("true", StringComparison.OrdinalIgnoreCase);
 
