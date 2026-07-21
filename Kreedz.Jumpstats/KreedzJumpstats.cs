@@ -47,6 +47,17 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly Vector[]   _takeoff     = new Vector[PlayerSlot.MaxPlayerCount];
     private readonly JumpType[] _type        = new JumpType[PlayerSlot.MaxPlayerCount];
 
+    // Per-jump stat accumulators (cs2kz Jump stats — computed from per-tick velocity + view angle).
+    private readonly float[] _takeoffSpeed = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _maxSpeed     = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _maxHeight    = new float[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _airTicks     = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _gainTicks    = new int[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _strafes      = new int[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _lastSpeed    = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[] _lastYaw      = new float[PlayerSlot.MaxPlayerCount];
+    private readonly int[]   _lastYawDir   = new int[PlayerSlot.MaxPlayerCount];
+
     public string DisplayName   => "[Kreedz] Jumpstats";
     public string DisplayAuthor => "yappershq";
 
@@ -82,12 +93,42 @@ public sealed class KreedzJumpstats : IModSharpModule
         var onGround = pawn.GroundEntityHandle.IsValid();
         var origin   = pawn.GetAbsOrigin();
 
+        var vel   = pawn.GetAbsVelocity();
+        var horiz = MathF.Sqrt(vel.X * vel.X + vel.Y * vel.Y);
+        var yaw   = pawn.GetEyeAngles().Y;
+
         if (_wasOnGround[slot] && !onGround)
         {
-            // Takeoff.
-            _takeoff[slot]  = origin;
-            _type[slot]     = _groundTicks[slot] <= PerfTicks ? JumpType.Bhop : JumpType.LongJump;
-            _tracking[slot] = pawn.ActualMoveType is MoveType.Walk; // ignore noclip/ladder starts
+            // Takeoff — reset accumulators.
+            _takeoff[slot]       = origin;
+            _type[slot]          = _groundTicks[slot] <= PerfTicks ? JumpType.Bhop : JumpType.LongJump;
+            _tracking[slot]      = pawn.ActualMoveType is MoveType.Walk; // ignore noclip/ladder starts
+            _takeoffSpeed[slot]  = horiz;
+            _maxSpeed[slot]      = horiz;
+            _maxHeight[slot]     = 0f;
+            _airTicks[slot]      = 0;
+            _gainTicks[slot]     = 0;
+            _strafes[slot]       = 0;
+            _lastSpeed[slot]     = horiz;
+            _lastYaw[slot]       = yaw;
+            _lastYawDir[slot]    = 0;
+        }
+        else if (!onGround && _tracking[slot])
+        {
+            // Airborne — accumulate per-tick stats.
+            _airTicks[slot]++;
+            if (horiz > _lastSpeed[slot] + 0.01f) _gainTicks[slot]++;   // sync: a gaining tick
+            if (horiz > _maxSpeed[slot]) _maxSpeed[slot] = horiz;
+            var h = origin.Z - _takeoff[slot].Z;
+            if (h > _maxHeight[slot]) _maxHeight[slot] = h;
+
+            var dy2 = NormalizeYaw(yaw - _lastYaw[slot]);
+            var dir = dy2 > 0.05f ? 1 : dy2 < -0.05f ? -1 : 0;         // strafes: mouse-direction reversals
+            if (dir != 0 && _lastYawDir[slot] != 0 && dir != _lastYawDir[slot]) _strafes[slot]++;
+            if (dir != 0) _lastYawDir[slot] = dir;
+
+            _lastSpeed[slot] = horiz;
+            _lastYaw[slot]   = yaw;
         }
         else if (!_wasOnGround[slot] && onGround && _tracking[slot])
         {
@@ -110,9 +151,21 @@ public sealed class KreedzJumpstats : IModSharpModule
         var tier = Tier(distance);
         if (tier == DistanceTier.None) return;
 
-        var label = type == JumpType.Bhop ? "BH" : "LJ";
+        var label   = type == JumpType.Bhop ? "BH" : "LJ";
+        var sync    = _airTicks[slot] > 0 ? 100f * _gainTicks[slot] / _airTicks[slot] : 0f;
+        var gain    = _maxSpeed[slot] - _takeoffSpeed[slot];
+
         if (_clientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, $"{label}: {distance:0.0}u — {tier}!");
+            client.Print(HudPrintChannel.Chat,
+                $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · " +
+                $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height");
+    }
+
+    private static float NormalizeYaw(float a)
+    {
+        while (a >  180f) a -= 360f;
+        while (a < -180f) a += 360f;
+        return a;
     }
 
     // VNL/CKZ LongJump tier thresholds (ascending). Full per-mode/per-type tables land with the port.
