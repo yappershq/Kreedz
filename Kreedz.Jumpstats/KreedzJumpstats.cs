@@ -259,13 +259,15 @@ public sealed class KreedzJumpstats : IModSharpModule
         var deadair = hasAa ? 100f * s.DeadAir / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _deadairTicks[slot] / _airTicks[slot] : 0f);
         var badAng  = hasAa ? 100f * s.BadAngles / s.TotalDuration : 0f;
         var width   = hasAa ? s.Width : _width[slot];
+        // External gain/loss only shows on boosters/pushes — hide the tiny takeoff-tick delta on normal jumps.
+        var ext     = hasAa && (s.ExternalGain > 5f || s.ExternalLoss < -5f) ? $" · {s.ExternalGain:+0}/{s.ExternalLoss:0} ext" : "";
 
         if (_clientManager.GetGameClient(slot) is not { IsFakeClient: false } client) return;
 
         client.Print(HudPrintChannel.Chat,
             $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
-            $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width");
+            $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width{ext}");
 
         // Persist the jump (jumpstats DB) — fire-and-forget, degrades to no-op without the request manager.
         if (_request is { } req)
@@ -287,7 +289,8 @@ public sealed class KreedzJumpstats : IModSharpModule
     }
 
     private readonly record struct StrafeStats(
-        float TotalDuration, float BadAngles, float Sync, float Overlap, float DeadAir, float Width);
+        float TotalDuration, float BadAngles, float Sync, float Overlap, float DeadAir, float Width,
+        float ExternalGain, float ExternalLoss);
 
     // cs2kz Strafe::End (kz_jumpstats.cpp) over the jump's buffered AACalls. Classification per call is
     // bit-exact — it's a pure function of the captured wishspeed/buttons and velocity pre/post the engine
@@ -296,7 +299,7 @@ public sealed class KreedzJumpstats : IModSharpModule
     // per-call accel + surfaceFriction, which aren't in the AACall yet.
     private StrafeStats ComputeStrafeStats(PlayerSlot slot)
     {
-        float total = 0, bad = 0, sync = 0, ovl = 0, dead = 0, width = 0;
+        float total = 0, bad = 0, sync = 0, ovl = 0, dead = 0, width = 0, extGain = 0, extLoss = 0;
         foreach (var c in _aaCalls[slot])
         {
             total += c.Duration;
@@ -321,8 +324,13 @@ public sealed class KreedzJumpstats : IModSharpModule
                 sync += c.Duration;      // real speed gained this call (cs2kz syncDuration)
 
             width += MathF.Abs(NormalizeYaw(c.CurrentYaw - c.PrevYaw));
+
+            // Speed injected/removed between ticks by non-player sources (boosters, teleport pushes) — cs2kz
+            // externalGain/externalLoss, split by sign of the cross-tick speed delta.
+            if (c.ExternalSpeedDiff > 0) extGain += c.ExternalSpeedDiff;
+            else                         extLoss += c.ExternalSpeedDiff;
         }
-        return new StrafeStats(total, bad, sync, ovl, dead, width);
+        return new StrafeStats(total, bad, sync, ovl, dead, width, extGain, extLoss);
     }
 
     // cs2kz per-mode, per-jump-type distance-tier tables (kz_mode_ckz.h / kz_mode_vnl.h). Rows index by

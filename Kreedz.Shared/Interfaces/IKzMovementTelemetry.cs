@@ -19,7 +19,8 @@ public readonly record struct AaCall(
     UserCommandButtons Buttons,
     float              Duration,
     float              PrevYaw,
-    float              CurrentYaw);
+    float              CurrentYaw,
+    float              ExternalSpeedDiff);
 
 /// <summary>Published by Kreedz.Core; consumed cross-plugin (e.g. Kreedz.Jumpstats) for per-aaCall stats.</summary>
 public interface IKzMovementTelemetry

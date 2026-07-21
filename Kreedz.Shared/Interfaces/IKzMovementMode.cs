@@ -37,4 +37,9 @@ public interface IKzMovementMode
 
     /// <summary>After the engine TryPlayerMove (cs2kz OnTryPlayerMovePost) — the slopefix collision reimpl.</summary>
     void OnTryPlayerMovePost(PlayerSlot slot, nint ms, nint mv) { }
+
+    /// <summary>After the whole tick's ProcessMovement (cs2kz OnProcessMovementPost, dispatched from the
+    /// FinishMove-equivalent post hook) — where cs2kz's VNL runs TriggerFix and modes apply per-tick trigger
+    /// interception. Core has already captured moveDataPost by the time this fires.</summary>
+    void OnProcessMovementPost(PlayerSlot slot, nint ms, nint mv) { }
 }

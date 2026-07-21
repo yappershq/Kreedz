@@ -46,11 +46,12 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
     private readonly Dictionary<nint, PlayerSlot> _slotByMs   = new();
     private readonly IKzMovementMode?[]           _modeBySlot = new IKzMovementMode?[PlayerSlot.MaxPlayerCount];
 
-    // Per-tick state the AirAccelerate detour can't cheaply read itself: held buttons + last/prev eye-yaw
-    // (cs2kz reads m_nButtons/oldAngles for its AACall). Cached once per tick in PlayerProcessMovePre.
-    private readonly UserCommandButtons[] _buttons = new UserCommandButtons[PlayerSlot.MaxPlayerCount];
-    private readonly float[]              _prevYaw = new float[PlayerSlot.MaxPlayerCount];
-    private readonly float[]              _lastYaw = new float[PlayerSlot.MaxPlayerCount];
+    // Per-tick AACall inputs the AirAccelerate detour can't cheaply read itself. Buttons come from
+    // PlayerProcessMovePre (m_nButtons); the last tick's post view-yaw + post speed come from the FinishMove-
+    // equivalent PlayerProcessMovePost (cs2kz's moveDataPost/oldAngles), so prevYaw and externalSpeedDiff match.
+    private readonly UserCommandButtons[] _buttons          = new UserCommandButtons[PlayerSlot.MaxPlayerCount];
+    private readonly float[]              _oldYaw           = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[]              _lastPostVelLen2D = new float[PlayerSlot.MaxPlayerCount];
 
     /// <summary>cs2kz AACall telemetry — raised once per AirAccelerate call (see <see cref="IKzMovementTelemetry"/>).</summary>
     public event Action<PlayerSlot, AaCall>? AirAccelerate;
@@ -82,6 +83,7 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
             "Install the Core native movement detours (CKZ rampbug/slopefix/air-cap). Set 0 if a sig breaks after a CS2 update.");
 
         _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _bridge.HookManager.PlayerProcessMovePost.InstallForward(OnProcessMovePost);
 
         if (_enabled?.GetBool() == true)
             TryInstall();
@@ -116,6 +118,7 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
     public void Shutdown()
     {
         _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _bridge.HookManager.PlayerProcessMovePost.RemoveForward(OnProcessMovePost);
         foreach (var hook in _hooks)
             hook.Uninstall();
         _hooks.Clear();
@@ -136,11 +139,27 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
         _slotByMs[ms.GetAbsPtr()] = slot;
         _modeBySlot[slot]         = _modes.GetMovementMode(slot);
 
-        // Snapshot the tick's AACall inputs (buttons + prev/this eye-yaw) for the AirAccelerate detour, which
-        // fires mid-ProcessMovement with only ms/mv. prevYaw = last tick's eye-yaw (cs2kz oldAngles.y).
+        // Snapshot this tick's held buttons for the AirAccelerate detour (fires mid-ProcessMovement with only
+        // ms/mv). prevYaw/externalSpeedDiff come from last tick's post state, captured in OnProcessMovePost.
         _buttons[slot] = arg.Service.KeyButtons;
-        _prevYaw[slot] = _lastYaw[slot];
-        _lastYaw[slot] = arg.Pawn.GetEyeAngles().Y;
+    }
+
+    // FinishMove-equivalent: cs2kz copies moveDataPost + dispatches OnProcessMovementPost at the end of
+    // ProcessMovement. We capture the post view-yaw (oldAngles) and post 2D speed (for the next tick's AACall
+    // externalSpeedDiff), then dispatch to the active mode (where VNL's TriggerFix / per-tick trigger work hangs).
+    private void OnProcessMovePost(IPlayerProcessMoveForwardParams arg)
+    {
+        var client = arg.Client;
+        if (!client.IsValid || client.IsFakeClient || !arg.Pawn.IsAlive)
+            return;
+
+        var slot = client.Slot;
+        var vel  = arg.Velocity;
+        _oldYaw[slot]           = arg.ViewAngles.Y;
+        _lastPostVelLen2D[slot] = MathF.Sqrt(vel.X * vel.X + vel.Y * vel.Y);
+
+        if (arg.Pawn.GetPlayerMovementService() is { } ms)
+            _modeBySlot[slot]?.OnProcessMovementPost(slot, ms.GetAbsPtr(), (nint) arg.Info);
     }
 
     private static (PlayerSlot Slot, IKzMovementMode? Mode) Resolve(nint ms)
@@ -192,6 +211,7 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
         ref var md      = ref Move(mv);
         var velPost     = md.Velocity + FrameVelocityDelta(mv);
         var duration    = MathF.Max(SubtickEnd(mv) - SubtickStart(mv), 0f) * EngineFixedTickInterval;
+        var preLen2D    = MathF.Sqrt(velPre.X * velPre.X + velPre.Y * velPre.Y);
         handler.Invoke(slot, new AaCall(
             Wishdir:      *(Vector*)pWishdir,
             WishSpeed:    wishspeed,
@@ -199,8 +219,11 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
             VelocityPost: velPost,
             Buttons:      self._buttons[slot],
             Duration:     duration,
-            PrevYaw:      self._prevYaw[slot],
-            CurrentYaw:   md.ViewAngles.Y));
+            PrevYaw:      self._oldYaw[slot],
+            CurrentYaw:   md.ViewAngles.Y,
+            // cs2kz: velocityPre.Length2D() - moveDataPost(last tick).m_vecVelocity.Length2D() — speed injected
+            // between ticks by something other than the player (boosters, teleport pushes) → external gain/loss.
+            ExternalSpeedDiff: preLen2D - self._lastPostVelLen2D[slot]));
     }
 
     private nint Hook(string name, nint hookFn)
