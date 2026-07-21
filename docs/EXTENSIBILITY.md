@@ -64,14 +64,20 @@ modes?.RegisterMode("ckz", "Classic", "CKZ", CkzConvars);
 This is exactly Prophunt's publish-in-PostInit / consume-in-OnAllSharpModulesLoaded pattern, so ordering
 is guaranteed (all PostInits finish before any OAM).
 
-## Why it isn't wired yet
+## Status: implemented
 
-This introduces the **first core-published** cross-plugin interface in the fork (today the core only
-*consumes* external providers). Getting it right needs: an ORM-free `.Shared` contract, the publish/consume
-lifecycle, and — critically — an **external example plugin** to prove the extension point end-to-end on a
-live server (the cross-plugin ALC/lifecycle can't be validated by a headless build). So it's a dedicated
-focused pass, like the movement engine, not a session-tail change. The modes/styles work correctly as
-built-ins today; this split is a refactor to *open* them, not a fix.
+The split is **live**. Package layout:
 
-**Recommended first external split:** CKZ movement as its own repo (`Timer-mode-classic` / a yappershq
-repo), since it's the largest self-contained piece and the most authentic to cs2kz's own layout.
+- `Kreedz.Shared` — publishes the `IKzModeRegistry` + `IKzStyleRegistry` contracts (ORM-free).
+- `Kreedz.Core` — data-driven registries; `ModeModule`/`KzStyleModule` `RegisterSharpModuleInterface` in
+  `OnPostInit`. No mode is hard-coded; built-in ABH/LGJ styles self-register.
+- `Kreedz.Mode.VNL` — satellite plugin; registers the Vanilla convar layer.
+- `Kreedz.Mode.CKZ` — satellite plugin; registers Classic **and owns the faithful cs2kz prestrafe/perf
+  movement**, gated on `GetPlayerMode == "ckz"`; consumes the registry in `OnAllModulesLoaded`.
+
+Adding a mode or style is now a new satellite plugin project against `Kreedz.Shared` — no Core changes.
+
+**Remaining validation:** the cross-plugin publish/consume follows the proven lifecycle (publish in
+PostInit, consume in OnAllModulesLoaded), but the cross-ALC load + hook interaction can only be certified
+on a live server. Styles still ship their ABH/LGJ built-ins in Core; extracting those to their own plugins
+is now a trivial repeat of the mode pattern.
