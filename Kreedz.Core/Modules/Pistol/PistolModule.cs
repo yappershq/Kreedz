@@ -55,19 +55,19 @@ internal sealed class PistolModule : IModule, IPistolModule
     {
         if (command.ArgCount < 1)
         {
-            Tell(slot, $"Usage: !pistol <{string.Join("/", new[] { "usp", "glock", "deagle", "p250", "tec9", "cz", "revolver" })}>");
+            Msg(slot, "Kreedz_Pistol_Usage", string.Join("/", new[] { "usp", "glock", "deagle", "p250", "tec9", "cz", "revolver" }));
             return ECommandAction.Handled;
         }
 
         if (!Pistols.TryGetValue(command.GetArg(1), out var classname))
         {
-            Tell(slot, $"Unknown pistol '{command.GetArg(1)}'.");
+            Msg(slot, "Kreedz_Pistol_Unknown", command.GetArg(1));
             return ECommandAction.Handled;
         }
 
         _preferred[slot] = classname;
         Give(slot, classname);
-        Tell(slot, $"Pistol set to {classname["weapon_".Length..]}.");
+        Msg(slot, "Kreedz_Pistol_Set", classname["weapon_".Length..]);
         return ECommandAction.Handled;
     }
 
@@ -87,9 +87,9 @@ internal sealed class PistolModule : IModule, IPistolModule
             pawn.GiveNamedItem(classname);
     }
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }

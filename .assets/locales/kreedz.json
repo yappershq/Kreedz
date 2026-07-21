@@ -4,5 +4,18 @@
   "Kreedz_Mode_Unknown":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown mode '{0}'." },
 
   "Kreedz_Finish":         { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp)." },
-  "Kreedz_Finish_Styled":  { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp) {{grey}}(styled — unranked)." }
+  "Kreedz_Finish_Styled":  { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp) {{grey}}(styled — unranked)." },
+
+  "Kreedz_Goto_Usage":     { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!goto <player>{{default}}." },
+  "Kreedz_Goto_NoMatch":   { "en-US": " {{green}}[KZ]{{default}} {{red}}No player matching '{0}'." },
+
+  "Kreedz_Fov_Usage":      { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!fov <{0}-{1}>{{default}}  (current: {{lime}}{2}{{default}})." },
+  "Kreedz_Fov_Set":        { "en-US": " {{green}}[KZ]{{default}} FOV set to {{lime}}{0}{{default}}." },
+
+  "Kreedz_Measure_A":      { "en-US": " {{green}}[KZ]{{default}} Measure: point {{lime}}A{{default}} set. Move and {{lime}}!measure{{default}} again for point B." },
+  "Kreedz_Measure_Result": { "en-US": " {{green}}[KZ]{{default}} Measure: horizontal {{lime}}{0}u{{default}}, 3D {{lime}}{1}u{{default}}, height {{lime}}{2}u{{default}}." },
+
+  "Kreedz_Pistol_Usage":   { "en-US": " {{green}}[KZ]{{default}} Usage: {{lime}}!pistol <{0}>{{default}}." },
+  "Kreedz_Pistol_Unknown": { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown pistol '{0}'." },
+  "Kreedz_Pistol_Set":     { "en-US": " {{green}}[KZ]{{default}} Pistol set to {{lime}}{0}{{default}}." }
 }

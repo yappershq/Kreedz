@@ -41,7 +41,7 @@ internal sealed class GotoModule : IModule, IGotoModule
     {
         if (command.ArgCount < 1)
         {
-            Tell(slot, "Usage: !goto <player>");
+            Msg(slot, "Kreedz_Goto_Usage");
             return ECommandAction.Handled;
         }
 
@@ -51,7 +51,7 @@ internal sealed class GotoModule : IModule, IGotoModule
         var query = command.GetArg(1);
         if (Resolve(query, slot) is not { } targetPawn)
         {
-            Tell(slot, $"No player matching '{query}'.");
+            Msg(slot, "Kreedz_Goto_NoMatch", query);
             return ECommandAction.Handled;
         }
 
@@ -88,9 +88,9 @@ internal sealed class GotoModule : IModule, IGotoModule
         return substringMatch;
     }
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }

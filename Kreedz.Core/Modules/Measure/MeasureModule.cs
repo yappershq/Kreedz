@@ -46,7 +46,7 @@ internal sealed class MeasureModule : IModule, IMeasureModule
         if (_pointA[slot] is not { } a)
         {
             _pointA[slot] = here;
-            Tell(slot, "Measure: point A set. Move and !measure again for point B.");
+            Msg(slot, "Kreedz_Measure_A");
             return ECommandAction.Handled;
         }
 
@@ -57,7 +57,7 @@ internal sealed class MeasureModule : IModule, IMeasureModule
         var distance   = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
 
         _pointA[slot] = null; // reset for the next measurement
-        Tell(slot, $"Measure: horizontal {horizontal:0.0}u, 3D {distance:0.0}u, height {dz:+0.0;-0.0}u.");
+        Msg(slot, "Kreedz_Measure_Result", horizontal.ToString("0.0"), distance.ToString("0.0"), dz.ToString("+0.0;-0.0"));
         return ECommandAction.Handled;
     }
 
@@ -68,9 +68,9 @@ internal sealed class MeasureModule : IModule, IMeasureModule
             ? pawn.GetAbsOrigin()
             : null;
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }

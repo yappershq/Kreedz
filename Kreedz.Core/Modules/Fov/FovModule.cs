@@ -71,14 +71,14 @@ internal sealed class FovModule : IModule, IFovModule
     {
         if (command.ArgCount < 1 || !uint.TryParse(command.GetArg(1), out var requested))
         {
-            Tell(slot, $"Usage: !fov <{MinFov}-{MaxFov}>  (current: {_fov[slot]})");
+            Msg(slot, "Kreedz_Fov_Usage", MinFov, MaxFov, _fov[slot]);
             return ECommandAction.Handled;
         }
 
         _fov[slot] = Math.Clamp(requested, MinFov, MaxFov);
         _prefs.Set(slot, PrefKey, _fov[slot].ToString());
         Apply(slot);
-        Tell(slot, $"FOV set to {_fov[slot]}.");
+        Msg(slot, "Kreedz_Fov_Set", _fov[slot]);
         return ECommandAction.Handled;
     }
 
@@ -95,9 +95,9 @@ internal sealed class FovModule : IModule, IFovModule
             controller.DesiredFOV = _fov[slot];
     }
 
-    private void Tell(PlayerSlot slot, string message)
+    private void Msg(PlayerSlot slot, string key, params object?[] args)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client)
-            client.Print(HudPrintChannel.Chat, message);
+            Loc.Chat(_bridge.LocalizerManager, client, key, args);
     }
 }
