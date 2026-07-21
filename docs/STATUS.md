@@ -15,12 +15,12 @@ subsystems and several are partial or not started (see below). See `KZ_PORT_PLAN
 | Modes | 🟡 | External `Kreedz.Mode.VNL`/`.CKZ` via `IKzModeRegistry`. **Full 33/33 convar layer** now; registry still has no movement-callback API (3rd-party modes can't add custom physics hooks yet). |
 | Styles | ✅ | 6 external plugins (`ABH,LGJ,LowGrav,Ice,WSOnly,ADOnly`) ≥ cs2kz's shipped set. |
 | Native movement detours | 🟡 | AirAccelerate→FinishMove hooked (sigs + typed `MoveData`), ON by default, **pass-through** — physics fill + FinishMove vhook pending live validation. |
-| Jumpstats | 🟡 | **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
+| Jumpstats | 🟡 | External `Kreedz.Jumpstats` plugin. **Basic** — LJ/BH + distance tiers only. Missing full stat set, jump-type classification, invalidation, jumpstats DB. |
 | HUD | 🟡 | Run timer + paused + speed/keys/mode/tp. Missing PB delta (needs cached PB), checkpoint count, spectator/replay HUD. |
 | DB | 🟡 | Runs/BestRuns/TrackScores/Bans/Prefs. Missing: jumpstats table, startpos, course names. |
 | Ranks | ✅ | Points + rank, ban-excluded leaderboards, `wr/pb/rank/top/recent/...`. |
 | Global API | 🟡 | Submit-only client (hello + NewRecord). Missing: PB/top/WR queries, replay up/download, auth/Prime, ban enforcement. |
-| Anticheat | 🟡 | 2 of cs2kz's 6 detectors (invalid-cvar + bhop-chain). No telemetry detectors, no infractions DB. |
+| Anticheat | 🟡 | External `Kreedz.Anticheat` plugin. 2 of cs2kz's 6 detectors (invalid-cvar + bhop-chain). No telemetry detectors, no infractions DB. |
 | Ban management | ✅ | `!ban`/`!unban` (@kz/ban) + connect-time kick, persisted. |
 | Preferences | ✅ | Mode/FOV/styles persist across reconnect (subset of cs2kz option keys). |
 | Utilities | ✅ | `goto`, `fov`, `measure`, `pistol`, `tip`, `noclip`. |
