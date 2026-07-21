@@ -57,6 +57,11 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
     // in ZoneModule. Rounded to the nearest unit; KZ zones are hundreds of units apart so this is unambiguous.
     private readonly Dictionary<(int X, int Y, int Z), (KzTriggerType Type, int Number)> _zonesByOrigin = new();
 
+    // A map loads through MULTIPLE CreateWorldInternal calls (main world + sub-worlds). Clear the accumulated
+    // zones only when the map actually changes, else a later sub-world wipes the main world's zones before the
+    // triggers spawn (that was the bug: the 24-entity sub-world cleared the 2 zones the main world stored).
+    private string _lastMap = "";
+
     private IRuntimeNativeHook? _hook;
 
     private static MapApiSourceModule? _self;
@@ -130,8 +135,13 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         if (pSingleWorld == null || pSingleWorld->pWorld == null)
             return;
 
-        _registry.Clear();
-        _zonesByOrigin.Clear();
+        var mapName = _bridge.GlobalVars.MapName;
+        if (!string.Equals(mapName, _lastMap, StringComparison.Ordinal))
+        {
+            _lastMap = mapName;
+            _registry.Clear();
+            _zonesByOrigin.Clear();
+        }
 
         ref var lumpHandles = ref pSingleWorld->pWorld->EntityLumps;
 
@@ -171,7 +181,11 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                         // the spawned trigger_multiple in ZoneModule.
                         if (KzTrigger.IsTimerZone(type)
                             && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var zoneOrigin))
-                            _zonesByOrigin[OriginKey(zoneOrigin.X, zoneOrigin.Y, zoneOrigin.Z)] = (type, ParseZoneNumber(dict, type));
+                        {
+                            var key = OriginKey(zoneOrigin.X, zoneOrigin.Y, zoneOrigin.Z);
+                            _zonesByOrigin[key] = (type, ParseZoneNumber(dict, type));
+                            _logger.LogInformation("[KZ.MapApi] stored zone {type} originKey=({x},{y},{z})", type, key.X, key.Y, key.Z);
+                        }
                     }
                 }
             }

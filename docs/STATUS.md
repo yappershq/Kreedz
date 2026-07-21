@@ -7,14 +7,16 @@ deliberately conservative.** It was rewritten 2026-07-21 after a skeptical, sour
 being *present*, not on it *running* or *matching cs2kz*. Kreedz is a working **movement-feel + DB/ranks
 skeleton**; it is **not** a complete cs2kz port. Verdicts below: COMPLETE / PARTIAL / MISSING.
 
-## ⚠️ The one that matters most
+## ⚠️ The one that mattered most — now unblocked (in progress)
 
-**Modern `kz_` maps register no zones today → no timer → not actually playable KZ on real maps.** The Mapping
-API parser (`Modules/MappingApi/MappingApi.cs`) is a faithful transcription of cs2kz's, but it is **wired to
-nothing** (not in DI, no `IMappingKeyValueSource` impl, never called). The live zone engine
-(`Modules/ZoneModule.cs`) is Source2Surf's **surf** targetname-matcher + native `HookEntityOutput`, not
-cs2kz's keyvalue-driven, TriggerFix (anti-dodge) trigger system. So a modern kz_ map (which describes zones
-via `timer_trigger_type` entity keyvalues) is invisible. This is the #1 blocker to being real KZ.
+Modern `kz_` maps describe zones via entity keyvalues (`timer_trigger_type`), not targetnames. That source
+was the #1 blocker. **It's now built + live-verified:** `MapApiSourceModule` detours
+`IWorldRendererMgr::CreateWorldInternal` (ported from StripperSharp's native `CEntityKeyValues` read layer),
+walks the entity lumps, reads the keyvalues, and feeds the (formerly dead) `MappingApiRegistry` parser.
+`ZoneModule` correlates the parsed zones to their spawned `trigger_multiple` by origin and registers real
+Start/End/Stage/Checkpoint zones. Verified on kz_pom (1 course, 2 zones) vs de_dust2 (0). **Remaining for full
+1:1 zones:** the TriggerFix anti-dodge trace re-detection, the modifier/antibhop/teleport/push/bhop-counter
+trigger types, the ZoneSplit type, and multi-course track mapping.
 
 ## Verdict matrix
 
@@ -25,8 +27,8 @@ via `timer_trigger_type` entity keyvalues) is invisible. This is the #1 blocker 
 | Styles | 🟡 PARTIAL | ABH/LGJ faithful. **AutoUnduck missing** (1 of cs2kz's only 3 real styles). Ice/LowGrav/WSOnly/ADOnly are *invented* (cs2kz never built them). No style-incompatibility check (ADOnly+WSOnly would freeze WASD). No timer-stop on style change. |
 | Timer | 🟡 PARTIAL | Source2Surf surf-timer engine + a thin PRO/STANDARD label. Start-gate is `alive && Walk` only — cs2kz's teleport/land/noclip/perf debounce + safeguard-pro enforcement missing. Pause doesn't truly freeze. No global submission state machine. |
 | Checkpoints | 🟡 PARTIAL | cp/tp list-cycle + PRO coupling faithful. `undo` is a *different* feature (deletes last cp vs cs2kz reverting the last teleport). Startpos not DB-persisted (cs2kz's is). Trigger-modifier guards missing. |
-| Zones / Triggers | 🔴 MISSING | Surf targetname matcher + native output hooks, not cs2kz's TriggerFix trace re-detection. No modifier/antibhop/teleport/push/bhop-counter trigger types. No Split zone. |
-| Mapping API | 🔴 MISSING | Faithful parser exists but is **dead code** — never invoked. Root cause of the zone/course gaps. |
+| Zones / Triggers | 🟡 PARTIAL | Mapping-API zones (Start/End/Stage/Checkpoint) now register via keyvalues + origin correlation, alongside the legacy targetname path. Still missing: cs2kz's TriggerFix anti-dodge trace re-detection, the modifier/antibhop/teleport/push/bhop-counter trigger types, and the Split zone type. |
+| Mapping API | 🟡 PARTIAL | Source built + live-verified: `MapApiSourceModule` reads entity keyvalues (native `CEntityKeyValues` via `CreateWorldInternal` detour) → feeds the parser → zones register. Missing: trigger-modifier keyvalues, multi-course track mapping, ZoneSplit. |
 | Courses | 🟡 PARTIAL | Multi-course exists as anonymous int tracks (0=main,1-31=bonus), not named `KZCourseDescriptor`. No Mode dimension in the record key, no course-switch-on-start-zone-touch. |
 | Global API | 🔴 MISSING | Submit-only shell: `hello` + one-way `NewRecord`, ack-blind (parses only `hello_ack`). No PB/WR/top/map/course queries, no ban sync, no replay transfer, no `filter_id`/course concept. Would likely not validate against a real backend. Needs an issued key regardless. |
 | Racing / 1v1 | 🔴 MISSING | 0% built. cs2kz's is a WebSocket cross-server coordinator (gated on their backend). |
