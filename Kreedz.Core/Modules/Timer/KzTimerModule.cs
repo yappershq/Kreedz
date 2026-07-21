@@ -66,9 +66,9 @@ internal sealed class KzTimerModule : IModule, IKzTimerModule, ITimerModuleListe
 
         var teleports = _checkpointModule.GetTeleportCount(client.Slot);
         var kind      = teleports == 0 ? "PRO" : "STANDARD";
-        var styled    = _styleModule.HasAnyStyle(client.Slot) ? " (styled — unranked)" : "";
 
-        client.Print(HudPrintChannel.Chat, $"Finished — {FormatTime(timerInfo.Time)}  [{kind}]  ({teleports} tp){styled}.");
+        var key = _styleModule.HasAnyStyle(client.Slot) ? "Kreedz_Finish_Styled" : "Kreedz_Finish";
+        Loc.Chat(_bridge.LocalizerManager, client, key, FormatTime(timerInfo.Time), kind, teleports);
     }
 
     private static string FormatTime(float seconds)

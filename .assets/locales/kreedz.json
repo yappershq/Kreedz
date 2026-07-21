@@ -1,5 +1,8 @@
 {
   "Kreedz_Mode_Current":   { "en-US": " {{green}}[KZ]{{default}} Current mode: {{lime}}{0}{{default}}. Available: {{lime}}{1}{{default}}. Use {{lime}}!mode <name>{{default}}." },
   "Kreedz_Mode_Set":       { "en-US": " {{green}}[KZ]{{default}} Mode set to {{lime}}{0}{{default}}." },
-  "Kreedz_Mode_Unknown":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown mode '{0}'." }
+  "Kreedz_Mode_Unknown":   { "en-US": " {{green}}[KZ]{{default}} {{red}}Unknown mode '{0}'." },
+
+  "Kreedz_Finish":         { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp)." },
+  "Kreedz_Finish_Styled":  { "en-US": " {{green}}[KZ]{{default}} Finished — {{lime}}{0}{{default}}  [{{gold}}{1}{{default}}]  ({2} tp) {{grey}}(styled — unranked)." }
 }
