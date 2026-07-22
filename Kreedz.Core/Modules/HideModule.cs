@@ -78,8 +78,13 @@ internal sealed class HideModule : IModule
         if (emitterEntIndex <= 0)
             return ret;
 
-        if (_bridge.EntityManager.FindEntityByIndex(new EntityIndex(emitterEntIndex)) is not { IsPlayerPawn: true } emitterEnt
-            || emitterEnt.AsPlayerPawn() is not { } emitterPawn
+        // cs2kz kz_quiet.cpp:293-318 — the emitter index may be a pawn, or a weapon/item whose owner is
+        // the pawn (reload foley, armor equip). Resolve to the owning controller either way.
+        if (_bridge.EntityManager.FindEntityByIndex(new EntityIndex(emitterEntIndex)) is not { IsValidEntity: true } emitterEnt)
+            return ret;
+
+        var pawnEnt = emitterEnt.IsPlayerPawn ? emitterEnt : emitterEnt.OwnerEntity;
+        if (pawnEnt?.AsPlayerPawn() is not { } emitterPawn
             || emitterPawn.GetController() is not { IsValidEntity: true } emitterController)
             return ret;
 
@@ -89,7 +94,8 @@ internal sealed class HideModule : IModule
 
         for (var v = 0; v < PlayerSlot.MaxPlayerCount.AsPrimitive(); v++)
         {
-            if (_hidden[v] && v != emitterSlot)
+            // cs2kz ShouldHideIndex: hide the emitter's sound only if v hides AND isn't spectating them.
+            if (_hidden[v] && v != emitterSlot && SpectatedSlot(new PlayerSlot((byte) v)) != emitterSlot)
                 modified &= ~(1UL << v);
         }
 
@@ -148,14 +154,28 @@ internal sealed class HideModule : IModule
         }
     }
 
+    // The slot the viewer is currently spectating (in-eye/roaming observer target), or -1.
+    private int SpectatedSlot(PlayerSlot viewer)
+    {
+        if (_bridge.ClientManager.GetGameClient(viewer)?.GetPlayerController() is not { IsValidEntity: true } ctrl
+            || ctrl.GetObserverPawn() is not { IsValidEntity: true } obsPawn
+            || obsPawn.GetObserverService() is not { } obs
+            || _bridge.EntityManager.FindEntityByHandle(obs.ObserverTarget) is not { IsValidEntity: true } target
+            || target.AsPlayerPawn()?.GetController() is not { IsValidEntity: true } targetCtrl)
+            return -1;
+
+        return targetCtrl.PlayerSlot.AsPrimitive();
+    }
+
     private void ApplyPair(Sharp.Shared.Objects.IGameClient viewer, Sharp.Shared.Objects.IGameClient other)
     {
         if (viewer.GetPlayerController() is not { IsValidEntity: true } viewerController
             || other.GetPlayerController() is not { IsValidEntity: true } otherController)
             return;
 
-        var tm      = _bridge.TransmitManager;
-        var visible = !_hidden[viewer.Slot];
+        var tm = _bridge.TransmitManager;
+        // cs2kz keeps the spectated player visible even while hiding — never blind your own in-eye target.
+        var visible = !_hidden[viewer.Slot] || SpectatedSlot(viewer.Slot) == other.Slot.AsPrimitive();
 
         if (!tm.IsEntityHooked(otherController))
             tm.AddEntityHooks(otherController, true);

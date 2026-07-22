@@ -358,6 +358,9 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
 
         var onGround = arg.Pawn.GroundEntityHandle.IsValid();
         var tookOff  = !onGround && _wasGround[slot];
+        // cs2kz gates KZ_PUSH_JUMP_EVENT on player->jumped (a real jump), not any ground-leave. Managed
+        // stand-in: an upward takeoff impulse (walking off a ledge has vz ~0/negative).
+        var jumped   = tookOff && arg.Pawn.GetAbsVelocity().Z > 150f;
 
         if (onGround && !_wasGround[slot])
             _landTime[slot] = _bridge.GlobalVars.CurTime;
@@ -406,7 +409,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
                     || ((c & KzPushCondition.Attack) != 0 && (pressed & UserCommandButtons.Attack) != 0)
                     || ((c & KzPushCondition.Attack2) != 0 && (pressed & UserCommandButtons.Attack2) != 0)
                     || ((c & KzPushCondition.Use) != 0 && (pressed & UserCommandButtons.Use) != 0)
-                    || ((c & KzPushCondition.JumpEvent) != 0 && tookOff))
+                    || ((c & KzPushCondition.JumpEvent) != 0 && jumped))
                     AddPushEvent(slot, handle, push);
             }
         }
@@ -763,7 +766,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         pawn.Teleport(finalOrigin, angles, st.Data.ResetSpeed ? new Vector() : velocity);
 
         // cs2kz OnTeleport — drop pending push events flagged cancel_on_teleport.
-        _pushEvents[slot].RemoveAll(static e => e.Data.CancelOnTeleport && !e.Applied);
+        _pushEvents[slot].RemoveAll(static e => e.Data.CancelOnTeleport); // cs2kz drops ALL cancel-on-tp events
         return true;
     }
 
