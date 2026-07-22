@@ -96,6 +96,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
     public bool Init()
     {
         _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _bridge.HookManager.PlayerProcessMovePost.InstallForward(OnProcessMovePost);
         _bridge.HookManager.PlayerRunCommand.InstallHookPre(OnRunCommandPre);
         _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
         return true;
@@ -104,6 +105,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
     public void Shutdown()
     {
         _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _bridge.HookManager.PlayerProcessMovePost.RemoveForward(OnProcessMovePost);
         _bridge.HookManager.PlayerRunCommand.RemoveHookPre(OnRunCommandPre);
         _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
     }
@@ -271,6 +273,8 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
 
         var slot = client.Slot;
 
+        _preOrigin[slot] = arg.Pawn.GetAbsOrigin(); // start-of-tick position for the path-swept TriggerFix
+
         UpdateTouchList(slot, arg.Pawn); // TriggerFix — refresh the touching sets from a live hull overlap
 
         var onGround = arg.Pawn.GroundEntityHandle.IsValid();
@@ -345,6 +349,92 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         {
             arg.Service.DuckOverride = false;
             _duckApplied[slot]       = false;
+        }
+    }
+
+    // ─── Path-swept TriggerFix (cs2kz VNL/CKZ OnTryPlayerMovePost → TouchTriggersAlongPath) ───
+    //
+    // A fast player can cross a thin trigger entirely within one tick — the per-tick overlap scan
+    // samples only the end position and would miss it. Sweep the (slightly XY-shrunk, per cs2kz)
+    // hull from the tick's start to end position and fire the discrete trigger effects for anything
+    // crossed but not currently overlapped: plain teleports (delay <= 0) and pushes. Momentary
+    // crossings of anti-bhop/modifier zones have no lasting effect, and bhop teleports require
+    // standing on them — nothing to do for those.
+    // ponytail: sweeps start→end in one segment; cs2kz sweeps each TryPlayerMove bump segment, so a
+    // path that bends around a corner mid-tick can still cut it. Upgrade = replay the bump points.
+
+    private readonly Vector[] _preOrigin = new Vector[PlayerSlot.MaxPlayerCount];
+
+    private void OnProcessMovePost(IPlayerProcessMoveForwardParams arg)
+    {
+        var client = arg.Client;
+        if (!client.IsValid || client.IsFakeClient || !arg.Pawn.IsAlive)
+            return;
+
+        var slot = client.Slot;
+        var pawn = arg.Pawn;
+
+        if (pawn.ActualMoveType == MoveType.NoClip)
+            return;
+
+        var from = _preOrigin[slot];
+        var to   = pawn.GetAbsOrigin();
+
+        var dx = to.X - from.X;
+        var dy = to.Y - from.Y;
+        var dz = to.Z - from.Z;
+        if (dx * dx + dy * dy + dz * dz < 4f) // < 2u moved — the overlap scan already covers it
+            return;
+
+        HitTriggers.Clear();
+
+        var attr = new RnQueryShapeAttr
+        {
+            m_nInteractsWith  = InteractionLayers.Trigger,
+            m_nObjectSetMask  = RnQueryObjectSet.All,
+            m_nCollisionGroup = CollisionGroupType.Debris,
+            HitSolid          = true,
+            HitTrigger        = true,
+            Unknown           = true,
+        };
+
+        var col  = pawn.GetCollisionProperty();
+        var mins = col?.Mins ?? new Vector(-16f, -16f, 0f);
+        var maxs = col?.Maxs ?? new Vector(16f, 16f, 72f);
+        var hull = new TraceShapeHull
+        {
+            Mins = new Vector(mins.X + 0.03125f, mins.Y + 0.03125f, mins.Z), // cs2kz shrinks XY for the sweep
+            Maxs = new Vector(maxs.X - 0.03125f, maxs.Y - 0.03125f, maxs.Z),
+        };
+
+        _bridge.PhysicsQueryManager.TraceShape(new TraceShapeRay(hull), from, to, attr,
+            (nint) (delegate* unmanaged<CTraceFilter*, nint, bool>) &CollectTriggerFilter);
+
+        foreach (var ptr in HitTriggers)
+        {
+            if (_bridge.EntityManager.MakeEntityFromPointer<Sharp.Shared.GameEntities.IBaseEntity>(ptr)
+                is not { IsValidEntity: true } trigger)
+                continue;
+
+            var handle = trigger.Handle.GetValue();
+            if (_teleports[slot].ContainsKey(handle) || _pushTouched[slot].Contains(handle)
+                || _antibhops[slot].ContainsKey(handle) || _modifiers[slot].ContainsKey(handle))
+                continue; // currently overlapped — the per-tick engine owns it
+
+            var triggerOrigin = trigger.GetAbsOrigin();
+            if (_mapApi.TryResolveTeleport(triggerOrigin, out var teleport))
+            {
+                if (!KzTrigger.IsBhop(teleport.Type) && teleport.Delay <= 0f)
+                {
+                    ExecuteTeleport(pawn, new TeleportState(teleport, _bridge.GlobalVars.CurTime, triggerOrigin));
+                    break; // teleported — the rest of the path no longer applies
+                }
+            }
+            else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
+            {
+                pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse);
+                _pushTouched[slot].Add(handle); // if the tick ENDED inside it, next tick's scan must not re-push
+            }
         }
     }
 

@@ -42,4 +42,9 @@ public interface IKzMovementMode
     /// FinishMove-equivalent post hook) — where cs2kz's VNL runs TriggerFix and modes apply per-tick trigger
     /// interception. Core has already captured moveDataPost by the time this fires.</summary>
     void OnProcessMovementPost(PlayerSlot slot, nint ms, nint mv) { }
+
+    /// <summary>cs2kz CanTouchTimerZone — whether timer-zone touch events are accepted right now. Modes gate
+    /// this to tick boundaries so subtick-time zone touches can't shave run time (VNL: full ticks only;
+    /// CKZ: full + half ticks). Default: always.</summary>
+    bool CanTouchTimerZone(PlayerSlot slot) => true;
 }

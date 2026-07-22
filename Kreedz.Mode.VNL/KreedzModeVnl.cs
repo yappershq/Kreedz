@@ -2,8 +2,10 @@
  * yappershq/Kreedz (KZ) — Vanilla (VNL) mode plugin
  *
  * A standalone ModSharp module that registers the Vanilla mode against Kreedz.Core's IKzModeRegistry.
- * VNL is faithful stock CS2 movement, so it only ships a convar layer — no custom movement hooks. This
- * mirrors cs2kz shipping modes as separate plugins; drop this DLL next to Kreedz.Core to add VNL.
+ * VNL is stock CS2 movement physics (convar layer only), but it is NOT hook-free (cs2kz kz_mode_vnl.cpp):
+ * it gates timer-zone touches to full ticks (CanTouchTimerZone — subtick-time touches can't shave run
+ * time). The path-swept TriggerFix that cs2kz's VNL also carries lives in Core's TriggerModifierModule
+ * (it applies to every mode there).
  */
 
 using System;
@@ -11,12 +13,20 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
+using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Mode.Vnl;
 
-public sealed class KreedzModeVnl : IModSharpModule
+public sealed class KreedzModeVnl : IModSharpModule, IKzMovementMode
 {
+    /// <summary>cs2kz VNL CanTouchTimerZone — timer zones only interact on full ticks.</summary>
+    public bool CanTouchTimerZone(PlayerSlot slot)
+    {
+        var tick = _shared.GetModSharp().GetGlobals().CurTime * 64.0;
+        return Math.Abs(Math.Round(tick) - tick) < 0.001;
+    }
+
     private readonly ISharedSystem            _shared;
     private readonly ILogger<KreedzModeVnl>   _logger;
 
@@ -48,6 +58,7 @@ public sealed class KreedzModeVnl : IModSharpModule
         }
 
         registry.RegisterMode("vnl", "Vanilla", "VNL", Convars);
+        registry.RegisterMovementMode("vnl", this); // no custom physics — only the timer-zone tick gate
         _logger.LogInformation("[Kreedz.Mode.VNL] registered.");
     }
 

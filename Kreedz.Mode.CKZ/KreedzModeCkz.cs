@@ -190,6 +190,15 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
 
     // ── IKzMovementMode — native movement callbacks (Core installs the detours; we supply the physics) ──
 
+    /// <summary>cs2kz CKZ CanTouchTimerZone — timer zones only interact on full OR half ticks (subtick-time
+    /// touches are rejected so subtick moves can't shave run time).</summary>
+    public bool CanTouchTimerZone(PlayerSlot slot)
+    {
+        var tick = _modSharp.GetGlobals().CurTime * 64.0;
+        var frac = Math.Abs(Math.Round(tick) - tick);
+        return frac < 0.001 || Math.Abs(frac - 0.5) < 0.001;
+    }
+
     /// <summary>cs2kz OnAirMove — cap air wishspeed to SPEED_NORMAL for the engine air-move.</summary>
     public void OnAirMove(PlayerSlot slot, nint ms, nint mv)
         => Move(mv).MaxSpeed = SpeedNormal;

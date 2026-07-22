@@ -72,6 +72,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
     private readonly ICommandManager      _commandManager;
     private readonly IRequestManager      _requestManager;
     private readonly IMapApiSource        _mapApi;
+    private readonly IModeModule          _modes;
 
     private readonly ILogger<ZoneModule> _logger;
     private readonly ListenerHub<IZoneModuleListener> _listenerHub;
@@ -95,6 +96,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                       ICommandManager     commandManager,
                       IRequestManager     requestManager,
                       IMapApiSource       mapApiSource,
+                      IModeModule         modeModule,
                       ILogger<ZoneModule> logger)
     {
         _bridge         = bridge;
@@ -103,6 +105,7 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         _commandManager = commandManager;
         _requestManager = requestManager;
         _mapApi         = mapApiSource;
+        _modes          = modeModule;
         _buildZoneInfo  = new BuildZoneInfo?[PlayerSlot.MaxPlayerCount];
 
         for (var t = 0; t < TimerConstants.MAX_TRACK; t++)
@@ -225,6 +228,13 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
             // Not a timer zone. Mapping-API teleport/push/anti-bhop/modifier triggers are handled by
             // TriggerModifierModule's per-tick hull-overlap scan (TriggerFix) — engine touch outputs
             // are deliberately not used for them (dodgeable with subtick movement).
+            return EHookAction.Ignored;
+        }
+
+        // cs2kz CanTouchTimerZone — the active mode gates timer-zone touch events to tick boundaries
+        // (VNL: full ticks; CKZ: full + half) so subtick-time touches can't shave run time.
+        if (_modes.GetMovementMode(controller.PlayerSlot)?.CanTouchTimerZone(controller.PlayerSlot) == false)
+        {
             return EHookAction.Ignored;
         }
 
