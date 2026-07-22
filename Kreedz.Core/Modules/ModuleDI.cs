@@ -36,6 +36,9 @@ internal static class ModuleDI
         // by ZoneModule's touch outputs; jump-block/gravity/duck applied per tick.
         services.ImplSingleton<ITriggerModifiers, IModule, TriggerModifierModule>();
 
+        // KZ port: !hide (cs2kz quiet) — per-viewer transmit hiding of other players + their weapons.
+        services.AddSingleton<IModule, HideModule>();
+
         services.ImplSingleton<ITimerModule, IModule, TimerModule>();
         services.ImplSingleton<IStyleModule, IModule, StyleModule>();
         services.ImplSingleton<IRecordModule, IModule, RecordModule>();

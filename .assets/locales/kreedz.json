@@ -59,6 +59,12 @@
   "Kreedz_Cp_GroundOnly": {
     "en-US": " {{green}}[KZ]{{default}} {{red}}You can only set a checkpoint on the ground or a ladder."
   },
+  "Kreedz_Hide_On": {
+    "en-US": " {{green}}[KZ]{{default}} Other players are now {{lime}}hidden{{default}}. Use {{lime}}!hide{{default}} to show them again."
+  },
+  "Kreedz_Hide_Off": {
+    "en-US": " {{green}}[KZ]{{default}} Other players are now {{lime}}visible{{default}}."
+  },
   "Kreedz_Cp_DisabledHere": {
     "en-US": " {{green}}[KZ]{{default}} {{red}}Checkpoints are disabled in this area."
   },
