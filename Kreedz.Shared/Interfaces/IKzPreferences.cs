@@ -13,6 +13,9 @@ public interface IKzPreferences
 
     string? Get(PlayerSlot slot, string key);
 
+    /// <summary>Set a preference (persisted on disconnect).</summary>
+    void Set(PlayerSlot slot, string key, string value);
+
     /// <summary>Fired on the game thread once a player's preferences have loaded from the DB.</summary>
     event Action<PlayerSlot>? Loaded;
 }

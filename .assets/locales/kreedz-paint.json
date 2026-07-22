@@ -1,0 +1,8 @@
+{
+  "Kreedz_Paint_On": {
+    "en-US": " {green}[KZ]{default} Paint {lime}enabled{default} — takeoff marks: green = perf, red = late."
+  },
+  "Kreedz_Paint_Off": {
+    "en-US": " {green}[KZ]{default} Paint {lime}disabled{default}."
+  }
+}

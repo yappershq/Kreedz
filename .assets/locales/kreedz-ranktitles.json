@@ -1,0 +1,8 @@
+{
+  "Kreedz_Rank": {
+    "en-US": " {green}[KZ]{default} Rank: {gold}{0}{default} — #{lime}{1}{default} of {lime}{2}{default} by points."
+  },
+  "Kreedz_Rank_None": {
+    "en-US": " {green}[KZ]{default} No points yet — finish a run first."
+  }
+}

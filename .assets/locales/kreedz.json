@@ -181,12 +181,6 @@
     "de-DE": " {{green}}[KZ]{{default}} {{red}}Du kannst kein Checkpoint in der Luft machen.",
     "ko-KR": " {{green}}[KZ]{{default}} {{red}}공중에서는 체크포인트를 만들 수 없습니다."
   },
-  "Kreedz_Rank": {
-    "en-US": " {{green}}[KZ]{{default}} Rank: {{gold}}{0}{{default}} — #{{lime}}{1}{{default}} of {{lime}}{2}{{default}} by points."
-  },
-  "Kreedz_Rank_None": {
-    "en-US": " {{green}}[KZ]{{default}} No points yet — finish a run first."
-  },
   "Kreedz_Course_Switched": {
     "en-US": " {{green}}[KZ]{{default}} Course: {{lime}}{0}{{default}}."
   },

@@ -33,6 +33,18 @@ internal sealed class OptionsModule : IModule
         return true;
     }
 
+    // Publish the chat-command surface for satellite plugins (Paint, RankTitles) — Core's command
+    // proxy routes to the external CommandCenter or the built-in fallback, so satellites don't care.
+    public void OnPostInit(Microsoft.Extensions.DependencyInjection.ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzCommands>(
+            _bridge.Entrypoint, IKzCommands.Identity, new KzCommandsAdapter(_commandManager));
+
+    private sealed class KzCommandsAdapter(ICommandManager commands) : IKzCommands
+    {
+        public void AddClientChatCommand(string command, IKzCommands.Handler handler)
+            => commands.AddClientChatCommand(command, (slot, cmd) => handler(slot, cmd));
+    }
+
     private void Bind(string command, string key, bool defaultOn)
         => _commandManager.AddClientChatCommand(command, (slot, _) =>
         {

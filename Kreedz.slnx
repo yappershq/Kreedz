@@ -19,6 +19,8 @@
   <Project Path="Kreedz.Style.ADOnly/Kreedz.Style.ADOnly.csproj" />
   <Project Path="Kreedz.Anticheat/Kreedz.Anticheat.csproj" />
   <Project Path="Kreedz.Jumpstats/Kreedz.Jumpstats.csproj" />
+  <Project Path="Kreedz.Paint/Kreedz.Paint.csproj" />
+  <Project Path="Kreedz.RankTitles/Kreedz.RankTitles.csproj" />
   <Project Path="Kreedz.Hud/Kreedz.Hud.csproj" />
   <Project Path="Kreedz.Global/Kreedz.Global.csproj" />
 </Solution>

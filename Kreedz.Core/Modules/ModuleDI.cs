@@ -51,9 +51,6 @@ internal static class ModuleDI
         // KZ port: !zt (cs2kz ztopwatch) — personal practice stopwatch between two user-placed zones.
         services.AddSingleton<IModule, ZtopwatchModule>();
 
-        // KZ port: !paint (cs2kz paint, beam-mark edition) + !rank (local rank titles).
-        services.AddSingleton<IModule, PaintModule>();
-        services.AddSingleton<IModule, RankTitleModule>();
 
         services.ImplSingleton<ITimerModule, IModule, TimerModule>();
         services.ImplSingleton<IStyleModule, IModule, StyleModule>();
