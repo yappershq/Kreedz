@@ -339,7 +339,7 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var abOrigin))
                         {
                             _antibhopsByOrigin[OriginKey(abOrigin.X, abOrigin.Y, abOrigin.Z)] =
-                                ParseFloat(dict.GetValueOrDefault("timer_anti_bhop_time", ""), 0f);
+                                MathF.Max(ParseFloat(dict.GetValueOrDefault("timer_anti_bhop_time", ""), 0f), 0f); // cs2kz MAX(time,0)
                         }
                         else if (type == KzTriggerType.Modifier
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var modOrigin))

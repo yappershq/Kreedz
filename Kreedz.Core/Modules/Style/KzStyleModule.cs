@@ -147,6 +147,12 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
 
     private void ClearStyles(PlayerSlot slot)
     {
+        if (_active[slot].Count == 0)
+        {
+            Msg(slot, "Kreedz_Style_Cleared");
+            return; // nothing to clear — never kill a live run on a no-op (parity: cs2kz early-returns)
+        }
+
         _active[slot].Clear();
         _timerModule.StopTimer(slot); // cs2kz: changing style invalidates the current run
         Persist(slot);

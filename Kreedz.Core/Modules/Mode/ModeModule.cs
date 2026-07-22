@@ -148,6 +148,13 @@ internal sealed class ModeModule : IModule, IModeModule, IKzModeRegistry
             return;
         }
 
+        // cs2kz: re-issuing the current mode is a no-op — never kill a live run on muscle-memory !ckz.
+        if (_current[slot] == id)
+        {
+            Msg(slot, "Kreedz_Mode_Set", mode.Name);
+            return;
+        }
+
         _current[slot] = id;
         _prefs.Set(slot, PrefKey, id);
         _timerModule.StopTimer(slot); // cs2kz: switching mode invalidates the current run

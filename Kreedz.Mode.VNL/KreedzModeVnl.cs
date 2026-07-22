@@ -63,8 +63,9 @@ public sealed class KreedzModeVnl : IModSharpModule, IKzMovementMode
         // cs2kz VNL Init — switch the player to knife on entering the mode (slot3).
         registry.PlayerModeChanged += (slot, mode) =>
         {
-            if (mode == "vnl" && _shared.GetClientManager().GetGameClient(slot) is { IsFakeClient: false } client)
-                client.ExecuteStringCommand("slot3");
+            if (mode == "vnl" && _shared.GetClientManager().GetGameClient(slot) is { IsFakeClient: false } client
+                && client.GetPlayerController()?.GetPlayerPawn() is { IsValidEntity: true, IsAlive: true })
+                client.ExecuteStringCommand("slot3"); // cs2kz gates Init's slot3 on IsAlive
         };
 
         _logger.LogInformation("[Kreedz.Mode.VNL] registered.");

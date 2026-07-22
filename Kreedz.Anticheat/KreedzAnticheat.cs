@@ -13,8 +13,8 @@
  *      repetitive low jump-pattern at >=18 perfs (macro), and avg pattern >=16 with >0.6 perf ratio
  *      (hyperscroll). Perfs only count when sv_jump_spam_penalty_time >= tick interval (CKZ sets 0 →
  *      desubtick 100% perfs are legit there, exactly like cs2kz).
- *   3. Nulls — inhumanly clean counter-strafes (per-axis release/press timing).
- *   4. Snaptap + subtick desubticking — same-subtick counter-strafes / zero-`when` subtick command spam.
+ *   3. Snaptap + subtick desubticking — same-subtick counter-strafes / zero-`when` subtick command spam
+ *      (kick/log-only, never autoban — cs2kz keeps these FP-sensitive classes kick-only).
  *   5. Autostrafe — scripted high strafes/sec over a rolling window of jumps.
  *   6. Strafe-optimizer — scripted yaw-accel pattern.
  * Flags feed the autoban accumulator (`kz_ac_autoban`, default off) and optionally kick (`kz_ac_autokick`).
@@ -84,13 +84,11 @@ public sealed class KreedzAnticheat : IModSharpModule
     private readonly IConVar?                _svJumpPenalty;   // sv_jump_spam_penalty_time — perfs only count when >= tick
 
     // Autoban accumulation (cs2kz Infraction→Finalize, simplified): confirmed flags within a fixed window;
-    // once the count crosses kz_ac_ban_threshold, ban for kz_ac_ban_minutes. Fixed-window auto-resets, so a
-    // reused slot never inherits a prior player's count. Default OFF (admin opt-in, like autokick).
+    // once the count crosses kz_ac_ban_threshold, ban for kz_ac_ban_minutes. ALL per-slot state (including
+    // this counter) resets on disconnect, so a reused slot never inherits a prior player's count.
     private const float BanWindow = 600f; // 10 min
     private readonly int[]   _infractions      = new int[PlayerSlot.MaxPlayerCount];
     private readonly float[] _infractionWindow = new float[PlayerSlot.MaxPlayerCount];
-
-    private const int NullsChain = 20; // clean counter-strafes in a row no human hits (cs2kz nulls detector)
 
     private readonly bool[]  _wasGround  = new bool[PlayerSlot.MaxPlayerCount];
     private readonly float[] _groundTime = new float[PlayerSlot.MaxPlayerCount];
@@ -107,12 +105,6 @@ public sealed class KreedzAnticheat : IModSharpModule
         for (var i = 0; i < a.Length; i++) a[i] = new List<T>();
         return a;
     }
-
-    // Nulls detector: a "null" script swaps strafe keys with zero overlap/deadair — a perfectly clean
-    // A↔D flip every tick. Humans pass through a both-pressed or neither-pressed tick. Count consecutive
-    // clean counter-strafes; an inhuman run of them = nulls. (Tick-resolution; cs2kz uses subtick timing.)
-    private readonly int[] _lastStrafeDir = new int[PlayerSlot.MaxPlayerCount]; // -1 left, +1 right, 0 none/both
-    private readonly int[] _nullsChain    = new int[PlayerSlot.MaxPlayerCount];
 
     // Subtick snaptap detector (cs2kz nulls): perfect same-subtick counter-strafes no human hits.
     private const float SnaptapEpsilon = 0.0078125f; // ~1 subtick — release+press this close = perfect
@@ -207,7 +199,46 @@ public sealed class KreedzAnticheat : IModSharpModule
         _hookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _hookManager.PlayerRunCommand.InstallHookPost(OnRunCommandPost);
+        _clientManager.InstallClientListener(_clientListener = new ClientListener(this));
         return true;
+    }
+
+    // cs2kz KZAnticheatService::Reset — EVERY per-slot buffer clears when the slot changes hands,
+    // so a new player never inherits the previous occupant's chains, counters, or infractions.
+    private sealed class ClientListener(KreedzAnticheat owner) : Sharp.Shared.Listeners.IClientListener
+    {
+        public int ListenerVersion  => Sharp.Shared.Listeners.IClientListener.ApiVersion;
+        public int ListenerPriority => 0;
+
+        public void OnClientConnected(IGameClient client)    => owner.ResetSlot(client.Slot);
+        public void OnClientDisconnected(IGameClient client) => owner.ResetSlot(client.Slot);
+    }
+
+    private ClientListener? _clientListener;
+
+    private void ResetSlot(PlayerSlot slot)
+    {
+        _landingEvents[slot].Clear();
+        _recentJumps[slot].Clear();
+        _snapChain[slot]        = 0;
+        _subtickCmds[slot]      = 0;
+        _subtickZeroWhen[slot]  = 0;
+        _subtickWinTicks[slot]  = 0;
+        _subtickSeen[slot]      = 0;
+        _wasGround[slot]        = false;
+        _groundTime[slot]       = 0f;
+        _airTicks[slot]         = 0;
+        _lastPos[slot]          = default;
+        _tpGuard[slot]          = 0;
+        _mtGuard[slot]          = 0;
+        _soPct[slot]            = 0f;
+        _yawLen[slot]           = 0;
+        _jumpTracking[slot]     = false;
+        _susIdx[slot]           = 0;
+        Array.Clear(_susWindow[slot]);
+        Array.Clear(_veryHighWin[slot]);
+        _infractions[slot]      = 0;
+        _infractionWindow[slot] = 0f;
     }
 
     public void OnAllModulesLoaded()
@@ -218,36 +249,15 @@ public sealed class KreedzAnticheat : IModSharpModule
         _evidence = mgr.GetOptionalSharpModuleInterface<IKzAcEvidence>(IKzAcEvidence.Identity)?.Instance;
     }
 
-    // Nulls detector — inspect per-tick strafe buttons for inhumanly-clean counter-strafes.
+    // Per-command stream processing. NOTE: the old tick-resolution "nulls" detector was REMOVED after
+    // parity review — cs2kz's real nulls detector needs subtick-exact timing over a 2048-event buffer
+    // with FPS scaling; a tick-level 20-chain approximation can false-flag skilled legit strafers.
     private void OnRunCommandPost(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
     {
         var client = param.Client;
         if (client.IsValid && !client.IsFakeClient && !(_svCheats?.GetBool() ?? false))
         {
-            var slot = client.Slot;
-            ParseCommandForJump(param, slot);
-            var left  = param.KeyButtons.HasFlag(UserCommandButtons.MoveLeft);
-            var right = param.KeyButtons.HasFlag(UserCommandButtons.MoveRight);
-            var dir   = left == right ? 0 : (left ? -1 : 1); // both or neither = 0 (a human transition)
-
-            if (dir != 0)
-            {
-                // A clean counter-strafe: direction flipped between two ticks with no 0-tick between.
-                if (_lastStrafeDir[slot] != 0 && dir != _lastStrafeDir[slot])
-                {
-                    if (++_nullsChain[slot] >= NullsChain)
-                    {
-                        Flag(client, $"nulls ({_nullsChain[slot]} perfect counter-strafes in a row)");
-                        _nullsChain[slot] = 0;
-                    }
-                }
-                _lastStrafeDir[slot] = dir;
-            }
-            else
-            {
-                _nullsChain[slot]    = 0; // overlap/deadair — human imperfection, reset
-                _lastStrafeDir[slot] = 0;
-            }
+            ParseCommandForJump(param, client.Slot);
         }
     }
 
@@ -562,7 +572,7 @@ public sealed class KreedzAnticheat : IModSharpModule
             {
                 if (_subtickCmds[slot] >= DesubtickMinCommands
                     && (float) _subtickZeroWhen[slot] / _subtickCmds[slot] >= DesubtickRatio)
-                    Flag(client, $"desubticking ({_subtickZeroWhen[slot]}/{_subtickCmds[slot]} zero-when subtick cmds in 20s)");
+                    Flag(client, $"desubticking ({_subtickZeroWhen[slot]}/{_subtickCmds[slot]} zero-when subtick cmds in 20s)", banEligible: false);
 
                 _subtickCmds[slot] = _subtickZeroWhen[slot] = _subtickWinTicks[slot] = 0;
             }
@@ -596,7 +606,9 @@ public sealed class KreedzAnticheat : IModSharpModule
             }
         }
 
-        if (!strafed) _snapChain[slot] = 0;
+        // Parity fix: a command without strafe moves (e.g. a jump press) does NOT reset the chain —
+        // cs2kz analyzes a persistent event buffer; only a real underlap gap resets (see RegisterCounterStrafe).
+        _ = strafed;
     }
 
     // A same-subtick (release+opposite-press within ~1 subtick) counter-strafe is inhumanly perfect; a run of
@@ -607,7 +619,7 @@ public sealed class KreedzAnticheat : IModSharpModule
         {
             if (++_snapChain[slot] >= SnaptapChain)
             {
-                Flag(client, $"snaptap ({_snapChain[slot]} perfect same-subtick counter-strafes)");
+                Flag(client, $"snaptap ({_snapChain[slot]} perfect same-subtick counter-strafes)", banEligible: false);
                 _snapChain[slot] = 0;
             }
         }
@@ -631,16 +643,58 @@ public sealed class KreedzAnticheat : IModSharpModule
         _modSharp.InvokeFrameAction(() => CheckClient(client));
     }
 
+    // sv_cheats replication grace (cs2kz ShouldEnforceCheatCvars): after the server toggles sv_cheats
+    // 1→0, clients keep the replicated value for a while — don't flag cheat-class cvars for 30s.
+    private const float SvCheatsGrace = 30f;
+    private float _svCheatsOnUntil = -1000f;
+
     private void CheckClient(IGameClient client)
     {
-        if (!client.IsValid || (_svCheats?.GetBool() ?? false)) return; // no detection while sv_cheats
+        if (!client.IsValid) return;
 
-        if (FirstViolation(client) is not { } violation) return;
+        if (_svCheats?.GetBool() ?? false)
+        {
+            _svCheatsOnUntil = _modSharp.GetGlobals().CurTime;
+            return; // no detection while sv_cheats
+        }
 
-        Flag(client, $"invalid cvar ({violation})");
+        // Userinfo-replicated cvars — readable synchronously (cs2kz's own userinfo split: m_yaw, sensitivity).
+        // Movement-integrity class: kick-only, never fed to the autoban counter (cs2kz cvars.cpp kicks these).
+        if (Value(client, "m_yaw") is { } yaw && yaw > 0.3)                    { Flag(client, "invalid cvar (m_yaw)", banEligible: false); return; }
+        if (Value(client, "sensitivity") is { } sv && (sv < 0.0001 || sv > 20.0)) { Flag(client, "invalid cvar (sensitivity)", banEligible: false); return; }
+
+        // Everything else lives client-side only — GetConVarValue reads userinfo and returns null for
+        // these (parity-review find: 9 of 11 checks were silently dead). Query the client asynchronously.
+        QueryCheck(client, "fps_max",        v => v is > 0.0 and < 64.0,        banEligible: false);
+        QueryCheck(client, "cl_pitchdown",   v => Math.Abs(v - 89.0)  > 0.001,  banEligible: false);
+        QueryCheck(client, "cl_pitchup",     v => Math.Abs(v - 89.0)  > 0.001,  banEligible: false);
+        QueryCheck(client, "cl_yawspeed",    v => Math.Abs(v - 210.0) > 0.001,  banEligible: false);
+        QueryCheck(client, "sv_cheats",      v => v != 0.0, cheatClass: true);
+        QueryCheck(client, "cl_showpos",     v => v != 0.0, cheatClass: true);
+        QueryCheck(client, "cam_showangles", v => v != 0.0, cheatClass: true);
+        QueryCheck(client, "cl_drawhud",     v => v == 0.0, cheatClass: true);
+        QueryCheck(client, "fov_cs_debug",   v => v != 0.0, cheatClass: true);
     }
 
-    private void Flag(IGameClient client, string reason)
+    private void QueryCheck(IGameClient client, string cvar, Func<double, bool> isViolation, bool banEligible = true, bool cheatClass = false)
+    {
+        _clientManager.QueryConVar(client, cvar, (cl, status, name, value) =>
+        {
+            if (status != QueryConVarValueStatus.ValueIntact || !cl.IsValid)
+                return;
+
+            if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || !isViolation(v))
+                return;
+
+            // Cheat-class cvars mirror the server's sv_cheats — grace the replication window after a toggle.
+            if (cheatClass && _modSharp.GetGlobals().CurTime - _svCheatsOnUntil < SvCheatsGrace)
+                return;
+
+            Flag(cl, $"invalid cvar ({name} = {value})", banEligible);
+        });
+    }
+
+    private void Flag(IGameClient client, string reason, bool banEligible = true)
     {
         // Attach a replay-evidence clip of the last 20s when a run recording exists (cs2kz infraction evidence).
         if (_evidence?.SaveEvidenceClip(client.Slot, 20f) is { } clip)
@@ -660,8 +714,9 @@ public sealed class KreedzAnticheat : IModSharpModule
         }
 
         // Autoban accumulation (cs2kz Infraction→Finalize, simplified): once flags cross the threshold within
-        // the window, ban + kick. Fixed-window so a reused slot never inherits a prior player's count.
-        if (_autoban.GetBool() && _request is { } banReq)
+        // the window, ban + kick. Slot state resets on disconnect (see OnClientDisconnected). FP-sensitive
+        // detector classes (snaptap/desubtick — cs2kz keeps their kin kick-only) never feed the ban counter.
+        if (banEligible && _autoban.GetBool() && _request is { } banReq)
         {
             var slot = client.Slot;
             var now  = _modSharp.GetGlobals().CurTime;
@@ -702,28 +757,6 @@ public sealed class KreedzAnticheat : IModSharpModule
     {
         try { await req.SaveInfractionAsync(sid, type, details); }
         catch (Exception e) { _logger.LogError(e, "[KZ.AC] failed to persist infraction for {Sid}", sid); }
-    }
-
-    // cs2kz anticheat/detectors/cvars.cpp — the 11 checked client cvars + exact thresholds. This runs only
-    // with the server's sv_cheats off (gated at the caller), so the cheat-cvar checks are always enforceable.
-    private static string? FirstViolation(IGameClient client)
-    {
-        // Movement-integrity cvars (checked regardless).
-        if (Value(client, "m_yaw")          is { } yaw && yaw > 0.3)                    return "m_yaw";        // MAXIMUM_M_YAW
-        if (Value(client, "fps_max")        is { } fps && fps > 0.0 && fps < 64.0)      return "fps_max";      // MINIMUM_FPS_MAX
-        if (Value(client, "sensitivity")    is { } s   && (s < 0.0001 || s > 20.0))     return "sensitivity";  // capped 0.0001..8 (20 for headroom)
-        if (Value(client, "cl_pitchdown")   is { } pd  && Math.Abs(pd - 89.0)  > 0.001) return "cl_pitchdown"; // must be 89
-        if (Value(client, "cl_pitchup")     is { } pu  && Math.Abs(pu - 89.0)  > 0.001) return "cl_pitchup";   // must be 89 (was wrongly -89)
-        if (Value(client, "cl_yawspeed")    is { } ys  && Math.Abs(ys - 210.0) > 0.001) return "cl_yawspeed";  // must be 210
-
-        // Cheat cvars (client should mirror the server's sv_cheats=0).
-        if (Value(client, "sv_cheats")      is { } sc  && sc != 0.0)                     return "sv_cheats";
-        if (Value(client, "cl_showpos")     is { } cp  && cp != 0.0)                     return "cl_showpos";
-        if (Value(client, "cam_showangles") is { } ca  && ca != 0.0)                     return "cam_showangles";
-        if (Value(client, "cl_drawhud")     is { } dh  && dh == 0.0)                     return "cl_drawhud";   // default 1, disabled = cheat
-        if (Value(client, "fov_cs_debug")   is { } fd  && fd != 0.0)                     return "fov_cs_debug";
-
-        return null;
     }
 
     private static double? Value(IGameClient client, string cvar)

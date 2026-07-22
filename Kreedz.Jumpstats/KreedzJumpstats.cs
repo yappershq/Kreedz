@@ -37,14 +37,15 @@ public enum DistanceTier { None, Meh, Impressive, Perfect, Godlike, Ownage, Wrec
 public sealed class KreedzJumpstats : IModSharpModule
 {
     private const float OffsetUnits = 32f;   // KZ block offset added to raw horizontal distance
-    private const int   PerfTicks   = 2;     // ground ticks <= this before takeoff -> bhop (perf-ish)
+    private const int   PerfTicks   = 3;     // cs2kz JS_MAX_BHOP_GROUND_TIME 0.05s = up to 3 ground ticks
 
     private readonly ISharedSystem            _shared;
     private readonly IHookManager             _hookManager;
     private readonly IClientManager           _clientManager;
     private readonly ILogger<KreedzJumpstats> _logger;
 
-    private const float JsEpsilon = 0.03125f; // cs2kz JS_EPSILON
+    private const float JsEpsilon    = 0.03125f;   // cs2kz JS_EPSILON
+    private const float TickInterval = 1f / 64f;
 
     // Block/edge tracking (cs2kz block_tracking.cpp). Regular jumps only — the LadderJump variant
     // needs m_vecLadderNormal, which ModSharp doesn't expose yet.
@@ -271,7 +272,9 @@ public sealed class KreedzJumpstats : IModSharpModule
             _tracking[slot] = false;
             var dx   = origin.X - _takeoff[slot].X;
             var dy   = origin.Y - _takeoff[slot].Y;
-            var dist = MathF.Sqrt(dx * dx + dy * dy) + OffsetUnits;
+            // cs2kz: LadderJumps get NO +32 model offset (their tier tables are raw-distance).
+            var dist = MathF.Sqrt(dx * dx + dy * dy)
+                       + (_type[slot] == JumpType.LadderJump ? 0f : OffsetUnits);
 
             // cs2kz EndBlockDistance — block/edge on gap jumps past the minimum block distance. When a
             // failstat latched mid-air, its block/edge estimate wins for reporting (cs2kz preserves the
@@ -295,7 +298,11 @@ public sealed class KreedzJumpstats : IModSharpModule
                 CalcAlwaysEdge(slot);
             }
 
-            if (_styles?.HasAnyStyle(slot) != true) // styled runs don't count (1:1); GetTier gates the distance
+            // cs2kz airtime cap: flights longer than 0.8s (1.04s ladder) are invalid — no report, no DB.
+            var airtime  = _airTicks[slot] * TickInterval;
+            var validAir = airtime <= (_type[slot] == JumpType.LadderJump ? 1.04f : 0.8f);
+
+            if (validAir && _styles?.HasAnyStyle(slot) != true) // styled runs don't count (1:1)
                 Report(slot, _type[slot], dist);
         }
 
@@ -352,6 +359,8 @@ public sealed class KreedzJumpstats : IModSharpModule
 
         var label = (isFailstat ? "FS-" : "") + Label(type);
         var gain  = _maxSpeed[slot] - _takeoffSpeed[slot];
+        // cs2kz strafe count = segments (first strafe opens with the jump), i.e. reversals + 1.
+        var strafeCount = _airTicks[slot] > 0 ? _strafes[slot] + 1 : _strafes[slot];
 
         // Prefer the bit-exact cs2kz Strafe::End stats from the native AACall stream; fall back to the per-tick
         // approximations only when the Core movement telemetry is absent (kz_native_movement 0 / sig failed).
@@ -361,7 +370,9 @@ public sealed class KreedzJumpstats : IModSharpModule
         var overlap = hasAa ? 100f * s.Overlap / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _overlapTicks[slot] / _airTicks[slot] : 0f);
         var deadair = hasAa ? 100f * s.DeadAir / s.TotalDuration : (_airTicks[slot] > 0 ? 100f * _deadairTicks[slot] / _airTicks[slot] : 0f);
         var badAng  = hasAa ? 100f * s.BadAngles / s.TotalDuration : 0f;
-        var width   = hasAa ? s.Width : _width[slot];
+        // cs2kz width = average degrees per strafe (total / strafe count), not the total.
+        var widthTotal = hasAa ? s.Width : _width[slot];
+        var width      = strafeCount > 0 ? widthTotal / strafeCount : widthTotal;
         // External gain/loss only shows on boosters/pushes — hide the tiny takeoff-tick delta on normal jumps.
         var ext     = hasAa && (s.ExternalGain > 5f || s.ExternalLoss < -5f) ? $" · {s.ExternalGain:+0}/{s.ExternalLoss:0} ext" : "";
 
@@ -379,13 +390,13 @@ public sealed class KreedzJumpstats : IModSharpModule
 
         var verdict = isFailstat ? "missed" : $"{tier}!";
         client.Print(HudPrintChannel.Chat,
-            $"{label}: {distance:0.0}u — {verdict}  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad{effStr} · " +
+            $"{label}: {distance:0.0}u — {verdict}  |  {strafeCount} strafes · {sync:0}% sync · {badAng:0}% bad{effStr} · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
             $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width{ext}{blockStr}");
 
         // Persist the jump (jumpstats DB) — fire-and-forget; failed (failstat) jumps are never records.
         if (!isFailstat && _request is { } req)
-            _ = SaveJumpAsync(req, client.SteamId, label, distance, _strafes[slot], sync, gain, _maxSpeed[slot], _maxHeight[slot]);
+            _ = SaveJumpAsync(req, client.SteamId, label, distance, strafeCount, sync, gain, _maxSpeed[slot], _maxHeight[slot]);
     }
 
     private async System.Threading.Tasks.Task SaveJumpAsync(IRequestManager req, Sharp.Shared.Units.SteamID sid,
