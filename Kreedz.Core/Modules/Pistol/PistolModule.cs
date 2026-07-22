@@ -6,6 +6,7 @@
  * aliases. Persisted in memory for now (→ OptionModule preference store later).
  */
 
+using System.Linq;
 using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
@@ -81,10 +82,23 @@ internal sealed class PistolModule : IModule, IPistolModule
 
     private void Give(PlayerSlot slot, string classname)
     {
-        if (_bridge.ClientManager.GetGameClient(slot) is { IsFakeClient: false } client
-            && client.GetPlayerController() is { IsValidEntity: true } controller
-            && controller.GetPlayerPawn() is { IsValidEntity: true, IsAlive: true } pawn)
-            pawn.GiveNamedItem(classname);
+        if (_bridge.ClientManager.GetGameClient(slot) is not { IsFakeClient: false } client
+            || client.GetPlayerController() is not { IsValidEntity: true } controller
+            || controller.GetPlayerPawn() is not { IsValidEntity: true, IsAlive: true } pawn)
+            return;
+
+        // cs2kz strips the existing pistol before giving the new one (no additive stacking of secondaries).
+        if (pawn.GetWeaponService() is { } weapons)
+        {
+            foreach (var handle in weapons.GetMyWeapons())
+            {
+                if (_bridge.EntityManager.FindEntityByHandle(handle) is { IsValidEntity: true } w
+                    && Pistols.Values.Contains(w.Classname))
+                    w.Kill();
+            }
+        }
+
+        pawn.GiveNamedItem(classname);
     }
 
     private void Msg(PlayerSlot slot, string key, params object?[] args)
