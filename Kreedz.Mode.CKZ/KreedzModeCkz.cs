@@ -85,6 +85,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
 
     private const float TickInterval = 1f / 64f;
     private readonly float[] _lastJumpReleaseTime = new float[PlayerSlot.MaxPlayerCount];
+    private IConVar? _forcedSubtick; // kz_ckz_forced_subtick — toggles the half-tick forced-subtick injection
 
     // cs2kz OnSetupMove half-tick input quantization: player subtick inputs snap to {0, 0.5} tick
     // boundaries, and a jump press >0.5 tick after the last release re-arms OldJumpPressed. This is the
@@ -122,6 +123,9 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
 
         _tpm = shared.GetConVarManager().CreateConVar("kz_ckz_tpm", false,
             "Enable the experimental TryPlayerMove slopefix reimplementation. Default 0 — validate against demos before enabling.");
+
+        _forcedSubtick = shared.GetConVarManager().CreateConVar("kz_ckz_forced_subtick", true,
+            "Force half-tick subtick move evaluation (cs2kz OnPhysicsSimulate). Default 1; toggle off if a live test shows movement issues.");
 
         for (var i = 0; i < _angleHistory.Length; i++)
             _angleHistory[i] = [];
@@ -226,6 +230,25 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
 
         var tickCount = _modSharp.GetGlobals().TickCount;
         var moves     = param.SubtickMoveSize;
+
+        // cs2kz OnPhysicsSimulate forced-subtick injection: put a subtick-move boundary at the half-tick
+        // just before this tick so the engine evaluates movement on the half-tick grid, not only at input
+        // times. m_arrForceSubtickMoveWhen[4] reached via the schema net-var API (extraOffset = elem*4B).
+        if (_forcedSubtick?.GetBool() == true && param.Pawn.GetMovementService() is { } fms)
+        {
+            var subtickTime = (tickCount - 0.5f) * TickInterval;
+            for (ushort i = 0; i < 4; i++)
+            {
+                var existing = fms.GetNetVar<float>("m_arrForceSubtickMoveWhen", (ushort) (i * 4));
+                if (MathF.Abs(subtickTime - existing) < 0.001f)
+                    break; // already a boundary at this time
+                if (subtickTime > existing)
+                {
+                    fms.SetNetVar("m_arrForceSubtickMoveWhen", subtickTime, false, (ushort) (i * 4));
+                    break;
+                }
+            }
+        }
         for (var i = 0; i < moves; i++)
         {
             var step = param.GetSubtickMove(i);
