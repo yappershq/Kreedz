@@ -464,6 +464,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
             Time = recordRequest.Time,
 
             Style = recordRequest.Style,
+            Mode  = recordRequest.Mode,
             Track = recordRequest.Track,
 
             Jumps   = recordRequest.Jumps,
@@ -513,6 +514,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                                    .Where(r => r.MapId    == newRecord.MapId
                                                && r.Stage == newRecord.Stage
                                                && r.Style == newRecord.Style
+                                               && r.Mode == newRecord.Mode
                                                && r.Track == newRecord.Track)
                                    .ToEnumerable();
 
@@ -551,6 +553,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                                 .Where(r => r.MapId    == newRecord.MapId
                                             && r.Stage == newRecord.Stage
                                             && r.Style == newRecord.Style
+                                               && r.Mode == newRecord.Mode
                                             && r.Track == newRecord.Track
                                             && r.Time  < newRecord.Time)
                                 .ToEnumerable()
@@ -643,6 +646,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
             Time = recordRequest.Time,
 
             Style = recordRequest.Style,
+            Mode  = recordRequest.Mode,
             Track = recordRequest.Track,
 
             Jumps   = recordRequest.Jumps,
@@ -692,6 +696,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                                          .Where(r => r.MapId    == newRecord.MapId
                                                      && r.Stage == newRecord.Stage
                                                      && r.Style == newRecord.Style
+                                               && r.Mode == newRecord.Mode
                                                      && r.Track == newRecord.Track
                                                      && r.Id    != newRecord.Id)
                                          .OrderBy(r => r.Time)
@@ -728,6 +733,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                                 .Where(r => r.MapId    == newRecord.MapId
                                             && r.Stage == newRecord.Stage
                                             && r.Style == newRecord.Style
+                                               && r.Mode == newRecord.Mode
                                             && r.Track == newRecord.Track
                                             && r.Time  < newRecord.Time)
                                 .ToEnumerable()

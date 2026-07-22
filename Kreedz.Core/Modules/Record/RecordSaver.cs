@@ -37,6 +37,7 @@ internal sealed class RecordSaver
     private readonly InterfaceBridge                    _bridge;
     private readonly IRequestManager                    _request;
     private readonly IStyleModule                       _styleModule;
+    private readonly IModeModule                        _modes;
     private readonly ICheckpointModule                  _checkpoint;
     private readonly MapRecordCache                     _mapCache;
     private readonly PlayerRecordCache                  _playerCache;
@@ -46,6 +47,7 @@ internal sealed class RecordSaver
     public RecordSaver(InterfaceBridge                    bridge,
                        IRequestManager                    request,
                        IStyleModule                       styleModule,
+                       IModeModule                        modeModule,
                        ICheckpointModule                  checkpoint,
                        MapRecordCache                     mapCache,
                        PlayerRecordCache                  playerCache,
@@ -54,6 +56,7 @@ internal sealed class RecordSaver
     {
         _bridge      = bridge;
         _request     = request;
+        _modes       = modeModule;
         _styleModule = styleModule;
         _checkpoint  = checkpoint;
         _mapCache    = mapCache;
@@ -115,6 +118,7 @@ internal sealed class RecordSaver
         var pbRecord = _playerCache.GetRecord(slot, style, track);
 
         var recordRequest = CreateRecordRequest(timerInfo, _styleModule, _checkpoint.GetTeleportCount(slot));
+        recordRequest.Mode = KzModes.ToIndex(_modes.GetMode(slot));
 
         return Task.Run(async () =>
                         {
@@ -204,6 +208,7 @@ internal sealed class RecordSaver
 
         var recordRequest = CreateRecordRequest(timerInfo, _styleModule, _checkpoint.GetTeleportCount(slot));
         recordRequest.Stage = timerInfo.Stage;
+        recordRequest.Mode  = KzModes.ToIndex(_modes.GetMode(slot));
 
         return Task.Run(async () =>
                         {

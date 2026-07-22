@@ -24,6 +24,9 @@ namespace Kreedz.Shared.Models;
 public class RecordRequest : IComparable<RecordRequest>
 {
     public int Style { get; set; }
+
+    /// <summary>Movement mode of the run (KzModes index; 0 = CKZ).</summary>
+    public int Mode { get; set; }
     public int Track { get; set; }
     public int Stage { get; set; }
 

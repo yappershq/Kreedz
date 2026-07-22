@@ -31,6 +31,9 @@ public class RunRecord : IComparable<RunRecord>
     public ulong  MapId      { get; set; }
 
     public int Style { get; set; }
+
+    /// <summary>Movement mode the run was made in (KzModes index; 0 = CKZ). Part of the record key.</summary>
+    public int Mode { get; set; }
     public int Track { get; set; }
     public int Stage { get; set; }
 
