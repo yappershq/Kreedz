@@ -749,6 +749,11 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
         // Save position and angles before pausing
         _pauseState[slot] = new PauseState(pawn.GetAbsOrigin(), pawn.GetEyeAngles());
 
+        // True freeze (cs2kz pause): stop the pawn dead and lock movement — MoveType.None keeps the view
+        // free but zeroes all locomotion. Restored to Walk on resume + re-asserted per tick below.
+        pawn.SetAbsVelocity(new Vector());
+        pawn.SetMoveType(MoveType.None);
+
         timerInfo.PauseTimer();
 
         if (_stageTimerInfo[slot] is { } stageTimer && stageTimer.IsTimerRunning())
@@ -773,7 +778,9 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
             return false;
         }
 
-        // Restore saved position and angles
+        // Unfreeze first, then restore saved position and angles.
+        pawn.SetMoveType(MoveType.Walk);
+
         if (_pauseState[slot] is { } state)
         {
             pawn.Teleport(state.Origin, state.Angles, new Vector());

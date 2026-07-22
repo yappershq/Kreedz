@@ -45,6 +45,13 @@ internal partial class TimerModule
             return;
         }
 
+        // Paused: hold the freeze — zero locomotion each tick (belt-and-suspenders with MoveType.None).
+        if (_timerInfo[client.Slot]?.IsTimerPaused() == true)
+        {
+            arg.Info->Velocity = new Vector();
+            return;
+        }
+
         var service = arg.Service;
 
         service.Stamina   = 0f;
