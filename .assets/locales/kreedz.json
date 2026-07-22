@@ -59,6 +59,12 @@
   "Kreedz_Cp_GroundOnly": {
     "en-US": " {{green}}[KZ]{{default}} {{red}}You can only set a checkpoint on the ground or a ladder."
   },
+  "Kreedz_Cp_DisabledHere": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Checkpoints are disabled in this area."
+  },
+  "Kreedz_Tp_DisabledHere": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Teleports are disabled in this area."
+  },
   "Kreedz_Cp_Set": {
     "en-US": " {{green}}[KZ]{{default}} Checkpoint {{lime}}{0}{{default}} set."
   },

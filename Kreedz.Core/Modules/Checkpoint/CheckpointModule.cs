@@ -40,6 +40,7 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
 {
     private readonly InterfaceBridge           _bridge;
     private readonly ICommandManager           _commandManager;
+    private readonly ITriggerModifiers         _triggerMods;
     private readonly ILogger<CheckpointModule> _logger;
 
     private readonly List<Checkpoint>[] _checkpoints = new List<Checkpoint>[PlayerSlot.MaxPlayerCount];
@@ -48,10 +49,11 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     private readonly Checkpoint?[]      _startPos         = new Checkpoint?[PlayerSlot.MaxPlayerCount];
     private readonly float[]            _lastTeleportTime = new float[PlayerSlot.MaxPlayerCount];
 
-    public CheckpointModule(InterfaceBridge bridge, ICommandManager commandManager, ILogger<CheckpointModule> logger)
+    public CheckpointModule(InterfaceBridge bridge, ICommandManager commandManager, ITriggerModifiers triggerModifiers, ILogger<CheckpointModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
+        _triggerMods    = triggerModifiers;
         _logger         = logger;
 
         for (var i = 0; i < _checkpoints.Length; i++)
@@ -105,6 +107,13 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     private void SetCheckpoint(PlayerSlot slot)
     {
         if (GetAlivePawn(slot) is not { } pawn) return;
+
+        // cs2kz InAntiCpArea — timer_modifier_disable_checkpoints zones block saving.
+        if (_triggerMods.CheckpointsDisabled(slot))
+        {
+            Msg(slot, "Kreedz_Cp_DisabledHere");
+            return;
+        }
 
         var onLadder = pawn.MoveType == MoveType.Ladder;
         if (!pawn.Flags.HasFlag(EntityFlags.OnGround) && !onLadder)
@@ -169,6 +178,14 @@ internal sealed class CheckpointModule : IModule, ICheckpointModule
     private void TeleportTo(PlayerSlot slot, Checkpoint cp)
     {
         if (GetAlivePawn(slot) is not { } pawn) return;
+
+        // cs2kz CanTeleportToCheckpoints — timer_modifier_disable_teleports zones block all cp teleports
+        // (single gate here covers tp/undo/prev/next/start).
+        if (_triggerMods.TeleportsDisabled(slot))
+        {
+            Msg(slot, "Kreedz_Tp_DisabledHere");
+            return;
+        }
         pawn.Teleport(cp.Origin, cp.Angles, new Vector()); // KZ teleport lands you standing (zero velocity)
         _tpCount[slot]++;
         _lastTeleportTime[slot] = _bridge.ModSharp.GetGlobals().CurTime; // cs2kz lastTeleportTime — JustTeleported gate

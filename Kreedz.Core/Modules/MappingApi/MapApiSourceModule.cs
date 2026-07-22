@@ -43,7 +43,25 @@ internal interface IMapApiSource
 
     /// <summary>Resolve a spawned trigger_multiple to a mapping-API push impulse (timer_push_amount) by origin.</summary>
     bool TryResolvePush(Vector origin, out Vector impulse);
+
+    /// <summary>Resolve an anti-bhop trigger by origin. time = timer_anti_bhop_time (0 = always block jumps).</summary>
+    bool TryResolveAntiBhop(Vector origin, out float time);
+
+    /// <summary>Resolve a modifier trigger (gravity/duck/disable-*) by origin.</summary>
+    bool TryResolveModifier(Vector origin, out KzMapModifier modifier);
 }
+
+// cs2kz KzMapModifier (kz_mappingapi.h) — the timer_modifier_* keyvalue set.
+internal readonly record struct KzMapModifier(
+    bool DisablePausing,
+    bool DisableCheckpoints,
+    bool DisableTeleports,
+    bool DisableJumpstats,
+    bool EnableSlide,
+    float Gravity,
+    float JumpFactor,
+    bool ForceDuck,
+    bool ForceUnduck);
 
 internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
 {
@@ -55,6 +73,10 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         "timer_zone_course_descriptor", "timer_zone_split_number", "timer_zone_checkpoint_number",
         "timer_zone_stage_number", "timer_course_number", "timer_course_name", "timer_course_disable_checkpoint",
         "timer_teleport_destination", "timer_teleport_reset_speed", "timer_push_amount",
+        "timer_anti_bhop_time", "timer_modifier_gravity", "timer_modifier_jump_impulse",
+        "timer_modifier_enable_slide", "timer_modifier_disable_jumpstats", "timer_modifier_disable_teleports",
+        "timer_modifier_disable_checkpoints", "timer_modifier_disable_pause", "timer_modifier_force_duck",
+        "timer_modifier_force_unduck",
     ];
 
     private readonly InterfaceBridge             _bridge;
@@ -73,6 +95,9 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
     // Push triggers (cs2kz KZTRIGGER_PUSH): trigger origin → impulse (timer_push_amount). Basic add-to-velocity
     // on enter; the per-axis set-speed / condition / cooldown flags are refinements.
     private readonly Dictionary<(int X, int Y, int Z), Vector> _pushesByOrigin = new();
+
+    private readonly Dictionary<(int X, int Y, int Z), float>         _antibhopsByOrigin = new();
+    private readonly Dictionary<(int X, int Y, int Z), KzMapModifier> _modifiersByOrigin = new();
 
     // A map loads through MULTIPLE CreateWorldInternal calls (main world + sub-worlds). Clear the accumulated
     // zones only when the map actually changes, else a later sub-world wipes the main world's zones before the
@@ -161,6 +186,8 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
             _teleportsByOrigin.Clear();
             _destinations.Clear();
             _pushesByOrigin.Clear();
+            _antibhopsByOrigin.Clear();
+            _modifiersByOrigin.Clear();
         }
 
         ref var lumpHandles = ref pSingleWorld->pWorld->EntityLumps;
@@ -225,6 +252,26 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                         {
                             _pushesByOrigin[OriginKey(pushOrigin.X, pushOrigin.Y, pushOrigin.Z)] = impulse;
                         }
+                        else if (type == KzTriggerType.AntiBhop
+                                 && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var abOrigin))
+                        {
+                            _antibhopsByOrigin[OriginKey(abOrigin.X, abOrigin.Y, abOrigin.Z)] =
+                                ParseFloat(dict.GetValueOrDefault("timer_anti_bhop_time", ""), 0f);
+                        }
+                        else if (type == KzTriggerType.Modifier
+                                 && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var modOrigin))
+                        {
+                            _modifiersByOrigin[OriginKey(modOrigin.X, modOrigin.Y, modOrigin.Z)] = new KzMapModifier(
+                                DisablePausing:     ParseBool(dict.GetValueOrDefault("timer_modifier_disable_pause", "")),
+                                DisableCheckpoints: ParseBool(dict.GetValueOrDefault("timer_modifier_disable_checkpoints", "")),
+                                DisableTeleports:   ParseBool(dict.GetValueOrDefault("timer_modifier_disable_teleports", "")),
+                                DisableJumpstats:   ParseBool(dict.GetValueOrDefault("timer_modifier_disable_jumpstats", "")),
+                                EnableSlide:        ParseBool(dict.GetValueOrDefault("timer_modifier_enable_slide", "")),
+                                Gravity:            ParseFloat(dict.GetValueOrDefault("timer_modifier_gravity", ""), 1f),
+                                JumpFactor:         ParseFloat(dict.GetValueOrDefault("timer_modifier_jump_impulse", ""), 1f),
+                                ForceDuck:          ParseBool(dict.GetValueOrDefault("timer_modifier_force_duck", "")),
+                                ForceUnduck:        ParseBool(dict.GetValueOrDefault("timer_modifier_force_unduck", "")));
+                        }
                     }
                 }
             }
@@ -283,7 +330,16 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
     public bool TryResolvePush(Vector origin, out Vector impulse)
         => _pushesByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out impulse);
 
+    public bool TryResolveAntiBhop(Vector origin, out float time)
+        => _antibhopsByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out time);
+
+    public bool TryResolveModifier(Vector origin, out KzMapModifier modifier)
+        => _modifiersByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out modifier);
+
     private static bool ParseBool(string s) => s is "1" || s.Equals("true", StringComparison.OrdinalIgnoreCase);
+
+    private static float ParseFloat(string s, float fallback)
+        => float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
     private static (int X, int Y, int Z) OriginKey(float x, float y, float z)
         => ((int) MathF.Round(x), (int) MathF.Round(y), (int) MathF.Round(z));

@@ -32,6 +32,10 @@ internal static class ModuleDI
         // read modern kz_ maps' timer_trigger_type/course keyvalues and feed the MappingApiRegistry parser.
         services.ImplSingleton<IMapApiSource, IModule, MapApiSourceModule>();
 
+        // KZ port: anti-bhop + modifier trigger runtime (cs2kz kz_trigger) — per-player touching sets fed
+        // by ZoneModule's touch outputs; jump-block/gravity/duck applied per tick.
+        services.ImplSingleton<ITriggerModifiers, IModule, TriggerModifierModule>();
+
         services.ImplSingleton<ITimerModule, IModule, TimerModule>();
         services.ImplSingleton<IStyleModule, IModule, StyleModule>();
         services.ImplSingleton<IRecordModule, IModule, RecordModule>();
