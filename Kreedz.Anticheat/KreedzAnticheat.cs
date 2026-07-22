@@ -72,8 +72,9 @@ public sealed class KreedzAnticheat : IModSharpModule
     private readonly IClientManager          _clientManager;
     private readonly ILogger<KreedzAnticheat> _logger;
 
-    private IRequestManager?  _request; // resolved cross-plugin for infraction persistence
-    private IKzStyleRegistry? _styles;  // resolved cross-plugin to skip AC on styled movement
+    private IRequestManager?  _request;  // resolved cross-plugin for infraction persistence
+    private IKzStyleRegistry? _styles;   // resolved cross-plugin to skip AC on styled movement
+    private IKzAcEvidence?    _evidence; // resolved cross-plugin to attach replay clips to flags
     private readonly IConVar                 _autokick;
     private readonly IConVar                 _autoban;
     private readonly IConVar                 _banThreshold;
@@ -211,9 +212,10 @@ public sealed class KreedzAnticheat : IModSharpModule
 
     public void OnAllModulesLoaded()
     {
-        var mgr  = _shared.GetSharpModuleManager();
-        _request = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
-        _styles  = mgr.GetOptionalSharpModuleInterface<IKzStyleRegistry>(IKzStyleRegistry.Identity)?.Instance;
+        var mgr   = _shared.GetSharpModuleManager();
+        _request  = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
+        _styles   = mgr.GetOptionalSharpModuleInterface<IKzStyleRegistry>(IKzStyleRegistry.Identity)?.Instance;
+        _evidence = mgr.GetOptionalSharpModuleInterface<IKzAcEvidence>(IKzAcEvidence.Identity)?.Instance;
     }
 
     // Nulls detector — inspect per-tick strafe buttons for inhumanly-clean counter-strafes.
@@ -640,6 +642,10 @@ public sealed class KreedzAnticheat : IModSharpModule
 
     private void Flag(IGameClient client, string reason)
     {
+        // Attach a replay-evidence clip of the last 20s when a run recording exists (cs2kz infraction evidence).
+        if (_evidence?.SaveEvidenceClip(client.Slot, 20f) is { } clip)
+            reason += $" [clip {clip}]";
+
         _logger.LogWarning("[KZ.AC] {Name} ({Sid}) flagged: {Reason}", client.Name, client.SteamId, reason);
 
         // Persist the infraction for review (cs2kz infractions.cpp) — fire-and-forget, degrades to no-op

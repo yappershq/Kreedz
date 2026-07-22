@@ -47,8 +47,51 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
                                       IGameListener,
                                       IRecordModuleListener,
                                       ITimerModuleListener,
-                                      IPlayerManagerListener
+                                      IPlayerManagerListener,
+                                      IKzAcEvidence
 {
+    // ─── AC evidence (cs2kz infraction replay evidence) ───
+
+    /// <summary>Snapshot the tail of the player's live recording to an evidence clip file.</summary>
+    public string? SaveEvidenceClip(PlayerSlot slot, float seconds)
+    {
+        if (_playerFrameData[slot] is not { Frames.Count: > 0 } data)
+            return null;
+
+        var take  = Math.Min(data.Frames.Count, Math.Max(1, (int) (seconds * TimerConstants.Tickrate)));
+        var clip  = data.Frames.GetRange(data.Frames.Count - take, take);
+        var name  = $"evidence_{data.SteamId.AsPrimitive()}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.replay";
+        var dir   = Path.Combine(_replayDirectory, "evidence");
+        var path  = Path.Combine(dir, name);
+
+        var header = new ReplayFileHeader
+        {
+            SteamId     = data.SteamId.AsPrimitive(),
+            TotalFrames = take,
+            PreFrame    = 0,
+            PostFrame   = 0,
+            Time        = take / (float) TimerConstants.Tickrate,
+            PlayerName  = data.Name,
+        };
+
+        var compressionLevel   = timer_replay_file_compression_level.GetInt32();
+        var compressionWorkers = timer_replay_file_compression_workers.GetInt32();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                await ReplayShared.WriteReplayToFileAsync(header, path, clip, compressionLevel, compressionWorkers, _logger)
+                                  .ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                _logger.LogError(e, "[KZ.Replay] failed to write AC evidence clip {Name}", name);
+            }
+        });
+
+        return name;
+    }
     public int ListenerVersion  => IGameListener.ApiVersion;
     public int ListenerPriority => 0;
 
@@ -143,6 +186,11 @@ internal class ReplayRecorderModule : IReplayRecorderModule,
 
         _replayDirectory = Path.Combine(bridge.TimerDataPath, "replays");
     }
+
+    // Publish the AC-evidence hook so the standalone Anticheat plugin can attach clips to infractions.
+    public void OnPostInit(Microsoft.Extensions.DependencyInjection.ServiceProvider provider)
+        => _bridge.SharpModuleManager.RegisterSharpModuleInterface<IKzAcEvidence>(
+            _bridge.Entrypoint, IKzAcEvidence.Identity, this);
 
     public bool Init()
     {
