@@ -24,6 +24,7 @@ using Sharp.Shared.Enums;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Extensions;
+using Kreedz.Shared;
 
 // ReSharper disable once CheckNamespace
 namespace Kreedz.Modules;
@@ -102,7 +103,7 @@ internal partial class RecordModule
             return ECommandAction.Handled;
         }
 
-        var records = _mapCache.GetRecords(style, bonus);
+        var records = _mapCache.GetRecords(style, bonus, KzModes.ToIndex(_modes.GetMode(slot)));
 
         if (records.Count == 0)
         {
@@ -220,7 +221,7 @@ internal partial class RecordModule
             return ECommandAction.Handled;
         }
 
-        var records = _mapCache.GetRecords(style, bonus);
+        var records = _mapCache.GetRecords(style, bonus, KzModes.ToIndex(_modes.GetMode(slot)));
         var rank    = 1;
         for (var i = 0; i < records.Count; i++)
         {

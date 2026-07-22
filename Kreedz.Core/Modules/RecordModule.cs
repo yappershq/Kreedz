@@ -70,6 +70,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
     private readonly InterfaceBridge       _bridge;
     private readonly ITimerModule          _timerModule;
     private readonly IStyleModule          _styleModule;
+    private readonly IModeModule           _modes;
     private readonly IPlayerManager        _playerManager;
     private readonly ICommandManager       _commandManager;
     private readonly IRequestManager       _request;
@@ -112,6 +113,7 @@ internal partial class RecordModule : IModule, IGameListener, IRecordModule, ITi
         _listenerHub = new ListenerHub<IRecordModuleListener>(logger);
         _mapCache    = new MapRecordCache(logger);
         _playerCache = new PlayerRecordCache(logger);
+        _modes       = modeModule;
         _saver       = new RecordSaver(bridge, request, styleModule, modeModule, checkpointModule, _mapCache, _playerCache, _listenerHub, logger);
         _taskTracker = new TaskTracker(logger);
     }
