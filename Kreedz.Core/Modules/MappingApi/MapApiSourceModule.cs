@@ -37,9 +37,12 @@ internal interface IMapApiSource
     /// </summary>
     bool TryResolveZone(Vector origin, out KzTriggerType type, out int number);
 
-    /// <summary>Resolve a spawned trigger_multiple to a mapping-API teleport destination (by origin). Returns
-    /// false if it isn't a teleport trigger. resetSpeed = timer_teleport_reset_speed (zero velocity on teleport).</summary>
-    bool TryResolveTeleport(Vector origin, out Vector destination, out bool resetSpeed);
+    /// <summary>Resolve a spawned trigger_multiple to its mapping-API teleport data (Teleport/MultiBhop/
+    /// SingleBhop/SequentialBhop family) by origin.</summary>
+    bool TryResolveTeleport(Vector origin, out KzMapTeleportData data);
+
+    /// <summary>Resolve a named teleport destination entity to its origin + angles.</summary>
+    bool TryResolveDestination(string name, out Vector origin, out Vector angles);
 
     /// <summary>Resolve a spawned trigger_multiple to a mapping-API push impulse (timer_push_amount) by origin.</summary>
     bool TryResolvePush(Vector origin, out Vector impulse);
@@ -50,6 +53,17 @@ internal interface IMapApiSource
     /// <summary>Resolve a modifier trigger (gravity/duck/disable-*) by origin.</summary>
     bool TryResolveModifier(Vector origin, out KzMapModifier modifier);
 }
+
+// cs2kz KzMapTeleport (kz_mappingapi.h) — the timer_teleport_* keyvalue set, shared by the plain Teleport
+// trigger and the three bhop variants (which type it is drives the per-tick teleport rules).
+internal readonly record struct KzMapTeleportData(
+    KzTriggerType Type,
+    string Destination,
+    float Delay,
+    bool UseDestAngles,
+    bool ResetSpeed,
+    bool Reorient,
+    bool Relative);
 
 // cs2kz KzMapModifier (kz_mappingapi.h) — the timer_modifier_* keyvalue set.
 internal readonly record struct KzMapModifier(
@@ -73,6 +87,8 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         "timer_zone_course_descriptor", "timer_zone_split_number", "timer_zone_checkpoint_number",
         "timer_zone_stage_number", "timer_course_number", "timer_course_name", "timer_course_disable_checkpoint",
         "timer_teleport_destination", "timer_teleport_reset_speed", "timer_push_amount",
+        "timer_teleport_relative", "timer_teleport_reorient_player", "timer_teleport_use_dest_angles",
+        "timer_teleport_delay", "angles",
         "timer_anti_bhop_time", "timer_modifier_gravity", "timer_modifier_jump_impulse",
         "timer_modifier_enable_slide", "timer_modifier_disable_jumpstats", "timer_modifier_disable_teleports",
         "timer_modifier_disable_checkpoints", "timer_modifier_disable_pause", "timer_modifier_force_duck",
@@ -87,10 +103,11 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
     // in ZoneModule. Rounded to the nearest unit; KZ zones are hundreds of units apart so this is unambiguous.
     private readonly Dictionary<(int X, int Y, int Z), (KzTriggerType Type, int Number)> _zonesByOrigin = new();
 
-    // Teleport triggers (cs2kz KZTRIGGER_TELEPORT): trigger origin → (destination targetname, resetSpeed).
-    // Destinations are any named entity's origin (info_target / info_teleport_destination), resolved on touch.
-    private readonly Dictionary<(int X, int Y, int Z), (string Dest, bool ResetSpeed)> _teleportsByOrigin = new();
-    private readonly Dictionary<string, Vector> _destinations = new(StringComparer.OrdinalIgnoreCase);
+    // Teleport-family triggers (cs2kz KZTRIGGER_TELEPORT/_MULTI_BHOP/_SINGLE_BHOP/_SEQUENTIAL_BHOP):
+    // trigger origin → full timer_teleport_* keyvalue set. Destinations are any named entity's
+    // origin+angles (info_target / info_teleport_destination), resolved at teleport time.
+    private readonly Dictionary<(int X, int Y, int Z), KzMapTeleportData> _teleportsByOrigin = new();
+    private readonly Dictionary<string, (Vector Origin, Vector Angles)> _destinations = new(StringComparer.OrdinalIgnoreCase);
 
     // Push triggers (cs2kz KZTRIGGER_PUSH): trigger origin → impulse (timer_push_amount). Basic add-to-velocity
     // on enter; the per-axis set-speed / condition / cooldown flags are refinements.
@@ -214,7 +231,10 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                 // info_teleport_destination) — teleport triggers reference these by targetname.
                 if (dict.GetValueOrDefault("targetname", "") is { Length: > 0 } destTarget
                     && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var destOrigin))
-                    _destinations[destTarget] = destOrigin;
+                {
+                    TryParseOrigin(dict.GetValueOrDefault("angles", ""), out var destAngles); // default 0,0,0
+                    _destinations[destTarget] = (destOrigin, destAngles);
+                }
 
                 // Route by the keys present (robust to classname variants): a course descriptor carries the
                 // timer_course_* keys; a KZ zone/modifier trigger carries timer_trigger_type.
@@ -239,12 +259,22 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                             _zonesByOrigin[key] = (type, ParseZoneNumber(dict, type));
                             _logger.LogInformation("[KZ.MapApi] stored zone {type} originKey=({x},{y},{z})", type, key.X, key.Y, key.Z);
                         }
-                        else if (type == KzTriggerType.Teleport
+                        else if ((KzTrigger.IsTeleport(type) || KzTrigger.IsBhop(type))
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var tpOrigin)
                                  && dict.GetValueOrDefault("timer_teleport_destination", "") is { Length: > 0 } tpDest)
                         {
-                            _teleportsByOrigin[OriginKey(tpOrigin.X, tpOrigin.Y, tpOrigin.Z)] =
-                                (tpDest, ParseBool(dict.GetValueOrDefault("timer_teleport_reset_speed", "")));
+                            var delay = MathF.Max(ParseFloat(dict.GetValueOrDefault("timer_teleport_delay", ""), 0f), 0f);
+                            if (KzTrigger.IsBhop(type))
+                                delay = MathF.Max(delay, 0.1f); // cs2kz: bhop triggers get a minimum grace
+
+                            _teleportsByOrigin[OriginKey(tpOrigin.X, tpOrigin.Y, tpOrigin.Z)] = new KzMapTeleportData(
+                                Type:          type,
+                                Destination:   tpDest,
+                                Delay:         delay,
+                                UseDestAngles: ParseBool(dict.GetValueOrDefault("timer_teleport_use_dest_angles", "")),
+                                ResetSpeed:    ParseBool(dict.GetValueOrDefault("timer_teleport_reset_speed", "")),
+                                Reorient:      ParseBool(dict.GetValueOrDefault("timer_teleport_reorient_player", "")),
+                                Relative:      ParseBool(dict.GetValueOrDefault("timer_teleport_relative", "")));
                         }
                         else if (type == KzTriggerType.Push
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var pushOrigin)
@@ -312,18 +342,20 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         return false;
     }
 
-    public bool TryResolveTeleport(Vector origin, out Vector destination, out bool resetSpeed)
-    {
-        destination = default;
-        resetSpeed  = false;
+    public bool TryResolveTeleport(Vector origin, out KzMapTeleportData data)
+        => _teleportsByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out data);
 
-        if (_teleportsByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out var tp)
-            && _destinations.TryGetValue(tp.Dest, out destination))
+    public bool TryResolveDestination(string name, out Vector origin, out Vector angles)
+    {
+        if (_destinations.TryGetValue(name, out var d))
         {
-            resetSpeed = tp.ResetSpeed;
+            origin = d.Origin;
+            angles = d.Angles;
             return true;
         }
 
+        origin = default;
+        angles = default;
         return false;
     }
 

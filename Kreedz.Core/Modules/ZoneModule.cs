@@ -230,8 +230,8 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
             var triggerOrigin = entity.GetAbsOrigin();
             if (output == "onstarttouch")
             {
-                if (_mapApi.TryResolveTeleport(triggerOrigin, out var dest, out var resetSpeed))
-                    pawn.Teleport(dest, pawn.GetEyeAngles(), resetSpeed ? new Vector() : pawn.GetAbsVelocity());
+                if (_mapApi.TryResolveTeleport(triggerOrigin, out var teleport))
+                    _triggerMods.EnterTeleport(controller.PlayerSlot, entityHandle, teleport, triggerOrigin);
                 else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
                     pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse);
                 else if (_mapApi.TryResolveAntiBhop(triggerOrigin, out var abTime))
