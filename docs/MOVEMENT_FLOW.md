@@ -51,6 +51,30 @@ RunCommand-pre bracket writes the identical value at an equivalent point. The `+
 **post** (mirrors cs2kz's PhysicsSimulate-post), with a once-per-tick gate because RunCommand can fire up to
 3× on a choked tick while cs2kz's PhysicsSimulate fires once.
 
+## Why cs2kz injects at PhysicsSimulate (their deliberate design)
+
+The forced subtick puts movement on a **fixed half-tick grid** — 2 equal sub-steps per tick, independent
+of the player's input subtick fractions (which they separately snap to {0, 0.5} in OnSetupMove). That's the
+deterministic "128-tick feel" on a 64-tick server, and it defeats subtick-timing abuse (they ship a
+`desubtick` AC detector). A fair grid must be scheduled from the tick level, never from per-input timing.
+
+PhysicsSimulate is chosen for three reasons:
+1. **Once per tick, before the schedule is built** — above SetupMove + the subtick loop, so it seeds the
+   boundaries before the loop consumes them, exactly once (not per-command = re-inject; not per-subtick =
+   corrupt the loop mid-iteration).
+2. **The pre/post pair brackets the whole tick** — pre before all ≤3 queued cmds, post after all of them.
+3. **Forward-scheduling for robustness + client prediction** — the POST forward-fills the next FOUR
+   half-tick boundaries (tick+0.5, +1.5, +2.5, +3.5) into the 4-slot array and replicates them
+   (`SetForcedSubtickMove(i, t)` → `network=true`); the PRE is server-only (`network=false`) because the
+   client already got that boundary from a previous tick's post. A rolling forward grid survives choke /
+   queued cmds / packet loss.
+
+**Why the RunCommand bracket preserves this:** the forward-fill is itself the robustness mechanism, and it
+covers the one case RunCommand differs from PhysicsSimulate — a 0-cmd tick (RunCommand doesn't fire) still
+has its half-tick pre-scheduled by earlier posts, and a 0-cmd tick runs no movement to consume it anyway.
+The only bit not mirrored: ModSharp's `SetNetVar` always replicates, so the pre boundary is re-sent to a
+client that already has it — idempotent, harmless, a few wasted bytes.
+
 ## Branch map (moveType dispatch, per subtick)
 
 - **Prechecks** (`0x180A4DC20` → CanMove? → CheckParameters `0x180A34E00` → Health≤0/flag0x20 clears wish →
