@@ -25,5 +25,6 @@ public enum EZoneType : sbyte
     Stage,
     Checkpoint,
     StopTimer,
+    Split, // cs2kz KZTRIGGER_ZONE_SPLIT — appended so persisted values stay stable
     Max,
 }

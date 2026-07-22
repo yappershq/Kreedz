@@ -116,6 +116,80 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         _modifiers[slot].Remove(triggerHandle);
         _teleports[slot].Remove(triggerHandle);
         _pushTouched[slot].Remove(triggerHandle);
+
+        if (_pushData[slot].Remove(triggerHandle, out var push)
+            && (push.Conditions & KzPushCondition.EndTouch) != 0)
+            AddPushEvent(slot, triggerHandle, push);
+    }
+
+    // ─── Push triggers (cs2kz AddPushEvent / ApplyPushes / CleanupPushEvents) ───
+    //
+    // Pushes are delayed EVENTS, not instant impulses: a satisfied condition queues (source, fireTime =
+    // now + delay); ApplyPushes fires events whose time falls in the current tick (per-axis setSpeed
+    // overrides vs additive); cleanup drops applied events once fireTime + cooldown passes — the event's
+    // presence in the queue doubles as the per-trigger cooldown/dedupe gate.
+
+    private struct PushEvent
+    {
+        public uint          Source;
+        public KzMapPushData Data;
+        public float         FireTime;
+        public bool          Applied;
+    }
+
+    private readonly Dictionary<uint, KzMapPushData>[] _pushData   = NewDicts<KzMapPushData>(); // touching push triggers
+    private readonly List<PushEvent>[]                 _pushEvents = NewPushLists();
+    private readonly UserCommandButtons[]              _newPressed = new UserCommandButtons[PlayerSlot.MaxPlayerCount];
+
+    private static List<PushEvent>[] NewPushLists()
+    {
+        var a = new List<PushEvent>[PlayerSlot.MaxPlayerCount];
+        for (var i = 0; i < a.Length; i++) a[i] = new List<PushEvent>();
+        return a;
+    }
+
+    private void AddPushEvent(PlayerSlot slot, uint source, in KzMapPushData data)
+    {
+        foreach (var e in _pushEvents[slot])
+            if (e.Source == source)
+                return; // pending/cooling event from this trigger — dedupe (cs2kz Find)
+
+        _pushEvents[slot].Add(new PushEvent
+        {
+            Source   = source,
+            Data     = data,
+            FireTime = _bridge.GlobalVars.CurTime + data.Delay,
+        });
+    }
+
+    private void ApplyAndCleanupPushes(PlayerSlot slot, Sharp.Shared.GameEntities.IPlayerPawn pawn)
+    {
+        var events = _pushEvents[slot];
+        if (events.Count == 0)
+            return;
+
+        var now       = _bridge.GlobalVars.CurTime;
+        var frametime = _bridge.GlobalVars.FrameTime;
+
+        for (var i = 0; i < events.Count; i++)
+        {
+            var e = events[i];
+            if (e.Applied || now < e.FireTime || now - frametime >= e.FireTime)
+                continue;
+
+            var vel = pawn.GetAbsVelocity();
+            vel.X = e.Data.SetSpeedX ? e.Data.Impulse.X : vel.X + e.Data.Impulse.X;
+            vel.Y = e.Data.SetSpeedY ? e.Data.Impulse.Y : vel.Y + e.Data.Impulse.Y;
+            vel.Z = e.Data.SetSpeedZ ? e.Data.Impulse.Z : vel.Z + e.Data.Impulse.Z;
+            pawn.SetAbsVelocity(vel);
+
+            e.Applied = true;
+            events[i] = e;
+        }
+
+        for (var i = events.Count - 1; i >= 0; i--)
+            if (events[i].Applied && now - frametime >= events[i].FireTime + events[i].Data.Cooldown)
+                events.RemoveAt(i);
     }
 
     // ─── TriggerFix: per-tick hull-overlap trigger detection (cs2kz UpdateTriggerTouchList) ───
@@ -151,6 +225,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
                 _modifiers[slot].Clear();
                 _teleports[slot].Clear();
                 _pushTouched[slot].Clear();
+                _pushData[slot].Clear();
             }
 
             return;
@@ -205,10 +280,12 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
                 _antibhops[slot][handle] = abTime;
             else if (_mapApi.TryResolveModifier(triggerOrigin, out var modifier))
                 _modifiers[slot][handle] = modifier;
-            else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
+            else if (_mapApi.TryResolvePush(triggerOrigin, out var push))
             {
-                pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse); // impulse once per entry
+                _pushData[slot][handle] = push;
                 _pushTouched[slot].Add(handle);
+                if ((push.Conditions & KzPushCondition.StartTouch) != 0)
+                    AddPushEvent(slot, handle, push);
             }
             else
             {
@@ -313,6 +390,26 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
             _lastSingleBhop[slot] = 0;
             _seqBhops[slot].Clear();
         }
+
+        // Push conditions that depend on this tick's inputs/movement (cs2kz TouchPushTrigger + OnStopTouchGround).
+        var pressed = _newPressed[slot];
+        _newPressed[slot] = 0;
+        if (_pushData[slot].Count > 0)
+        {
+            foreach (var (handle, push) in _pushData[slot])
+            {
+                var c = push.Conditions;
+                if ((c & KzPushCondition.Touch) != 0
+                    || ((c & KzPushCondition.JumpButton) != 0 && (pressed & UserCommandButtons.Jump) != 0)
+                    || ((c & KzPushCondition.Attack) != 0 && (pressed & UserCommandButtons.Attack) != 0)
+                    || ((c & KzPushCondition.Attack2) != 0 && (pressed & UserCommandButtons.Attack2) != 0)
+                    || ((c & KzPushCondition.Use) != 0 && (pressed & UserCommandButtons.Use) != 0)
+                    || ((c & KzPushCondition.JumpEvent) != 0 && tookOff))
+                    AddPushEvent(slot, handle, push);
+            }
+        }
+
+        ApplyAndCleanupPushes(slot, arg.Pawn);
 
         EvaluateTeleports(slot, arg.Pawn, onGround);
 
@@ -426,14 +523,15 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
             {
                 if (!KzTrigger.IsBhop(teleport.Type) && teleport.Delay <= 0f)
                 {
-                    ExecuteTeleport(pawn, new TeleportState(teleport, _bridge.GlobalVars.CurTime, triggerOrigin));
+                    ExecuteTeleport(slot, pawn, new TeleportState(teleport, _bridge.GlobalVars.CurTime, triggerOrigin));
                     break; // teleported — the rest of the path no longer applies
                 }
             }
-            else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
+            else if (_mapApi.TryResolvePush(triggerOrigin, out var push))
             {
-                pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse);
-                _pushTouched[slot].Add(handle); // if the tick ENDED inside it, next tick's scan must not re-push
+                // Crossed within one tick = a start-touch + touch that the overlap scan never saw.
+                if ((push.Conditions & (KzPushCondition.StartTouch | KzPushCondition.Touch)) != 0)
+                    AddPushEvent(slot, handle, push);
             }
         }
     }
@@ -480,12 +578,12 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
                 shouldTeleport = st.Data.Delay <= 0f || now - st.StartTouchTime > st.Data.Delay;
             }
 
-            if (shouldTeleport && ExecuteTeleport(pawn, st))
+            if (shouldTeleport && ExecuteTeleport(slot, pawn, st))
                 break; // one teleport per tick; the rest re-evaluate next tick
         }
     }
 
-    private bool ExecuteTeleport(Sharp.Shared.GameEntities.IPlayerPawn pawn, in TeleportState st)
+    private bool ExecuteTeleport(PlayerSlot slot, Sharp.Shared.GameEntities.IPlayerPawn pawn, in TeleportState st)
     {
         if (!_mapApi.TryResolveDestination(st.Data.Destination, out var destOrigin, out var destAngles))
         {
@@ -518,6 +616,9 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         }
 
         pawn.Teleport(finalOrigin, angles, st.Data.ResetSpeed ? new Vector() : velocity);
+
+        // cs2kz OnTeleport — drop pending push events flagged cancel_on_teleport.
+        _pushEvents[slot].RemoveAll(static e => e.Data.CancelOnTeleport && !e.Applied);
         return true;
     }
 
@@ -532,7 +633,12 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
     private HookReturnValue<EmptyHookReturn> OnRunCommandPre(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
     {
         var client = param.Client;
-        if (client.IsValid && !client.IsFakeClient && AntiBhopActive(client.Slot))
+        if (!client.IsValid || client.IsFakeClient)
+            return ret;
+
+        _newPressed[client.Slot] |= param.ChangedButtons & param.KeyButtons; // push button conditions
+
+        if (AntiBhopActive(client.Slot))
         {
             param.KeyButtons     &= ~UserCommandButtons.Jump;
             param.ChangedButtons &= ~UserCommandButtons.Jump;
@@ -555,8 +661,11 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         _modifiers[slot].Clear();
         _teleports[slot].Clear();
         _pushTouched[slot].Clear();
+        _pushData[slot].Clear();
+        _pushEvents[slot].Clear();
         _seqBhops[slot].Clear();
         _lastSingleBhop[slot] = 0;
+        _newPressed[slot]     = 0;
         _gravityApplied[slot] = false;
         _duckApplied[slot]    = false;
     }

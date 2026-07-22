@@ -531,7 +531,8 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
             KzTriggerType.ZoneEnd        => EZoneType.End,
             KzTriggerType.ZoneStage      => EZoneType.Stage,
             KzTriggerType.ZoneCheckpoint => EZoneType.Checkpoint,
-            _                            => EZoneType.Invalid, // ZoneSplit has no EZoneType yet — follow-up
+            KzTriggerType.ZoneSplit      => EZoneType.Split,
+            _                            => EZoneType.Invalid,
         };
 
         if (type == EZoneType.Invalid || entity.GetCollisionProperty() is not { } collision)

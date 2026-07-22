@@ -181,6 +181,9 @@
     "de-DE": " {{green}}[KZ]{{default}} {{red}}Du kannst kein Checkpoint in der Luft machen.",
     "ko-KR": " {{green}}[KZ]{{default}} {{red}}공중에서는 체크포인트를 만들 수 없습니다."
   },
+  "Kreedz_Split": {
+    "en-US": " {{green}}[KZ]{{default}} Split {{lime}}{0}{{default}}: {{gold}}{1}{{default}}."
+  },
   "Kreedz_Hide_On": {
     "en-US": " {{green}}[KZ]{{default}} Other players are now {{lime}}hidden{{default}}. Use {{lime}}!hide{{default}} to show them again.",
     "zh-CN": " {{green}}[KZ]{{default}} 已隐藏其他玩家模型.",

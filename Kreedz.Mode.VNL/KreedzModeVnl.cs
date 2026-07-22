@@ -59,6 +59,14 @@ public sealed class KreedzModeVnl : IModSharpModule, IKzMovementMode
 
         registry.RegisterMode("vnl", "Vanilla", "VNL", Convars);
         registry.RegisterMovementMode("vnl", this); // no custom physics — only the timer-zone tick gate
+
+        // cs2kz VNL Init — switch the player to knife on entering the mode (slot3).
+        registry.PlayerModeChanged += (slot, mode) =>
+        {
+            if (mode == "vnl" && _shared.GetClientManager().GetGameClient(slot) is { IsFakeClient: false } client)
+                client.ExecuteStringCommand("slot3");
+        };
+
         _logger.LogInformation("[Kreedz.Mode.VNL] registered.");
     }
 

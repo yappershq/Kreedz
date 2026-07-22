@@ -44,8 +44,8 @@ internal interface IMapApiSource
     /// <summary>Resolve a named teleport destination entity to its origin + angles.</summary>
     bool TryResolveDestination(string name, out Vector origin, out Vector angles);
 
-    /// <summary>Resolve a spawned trigger_multiple to a mapping-API push impulse (timer_push_amount) by origin.</summary>
-    bool TryResolvePush(Vector origin, out Vector impulse);
+    /// <summary>Resolve a spawned trigger_multiple to its mapping-API push data by origin.</summary>
+    bool TryResolvePush(Vector origin, out KzMapPushData push);
 
     /// <summary>Resolve an anti-bhop trigger by origin. time = timer_anti_bhop_time (0 = always block jumps).</summary>
     bool TryResolveAntiBhop(Vector origin, out float time);
@@ -64,6 +64,31 @@ internal readonly record struct KzMapTeleportData(
     bool ResetSpeed,
     bool Reorient,
     bool Relative);
+
+// cs2kz KzMapPush conditions (kz_mappingapi.h).
+[Flags]
+internal enum KzPushCondition : uint
+{
+    StartTouch = 1,
+    Touch      = 2,
+    EndTouch   = 4,
+    JumpEvent  = 8,
+    JumpButton = 16,
+    Attack     = 32,
+    Attack2    = 64,
+    Use        = 128,
+}
+
+// cs2kz KzMapPush — the timer_push_* keyvalue set.
+internal readonly record struct KzMapPushData(
+    Vector Impulse,
+    KzPushCondition Conditions,
+    bool SetSpeedX,
+    bool SetSpeedY,
+    bool SetSpeedZ,
+    bool CancelOnTeleport,
+    float Cooldown,
+    float Delay);
 
 // cs2kz KzMapModifier (kz_mappingapi.h) — the timer_modifier_* keyvalue set.
 internal readonly record struct KzMapModifier(
@@ -89,6 +114,11 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         "timer_teleport_destination", "timer_teleport_reset_speed", "timer_push_amount",
         "timer_teleport_relative", "timer_teleport_reorient_player", "timer_teleport_use_dest_angles",
         "timer_teleport_delay", "angles",
+        "timer_push_abs_speed_x", "timer_push_abs_speed_y", "timer_push_abs_speed_z",
+        "timer_push_cancel_on_teleport", "timer_push_cooldown", "timer_push_delay",
+        "timer_push_condition_start_touch", "timer_push_condition_touch", "timer_push_condition_end_touch",
+        "timer_push_condition_jump_event", "timer_push_condition_jump_button", "timer_push_condition_attack",
+        "timer_push_condition_attack2", "timer_push_condition_use",
         "timer_anti_bhop_time", "timer_modifier_gravity", "timer_modifier_jump_impulse",
         "timer_modifier_enable_slide", "timer_modifier_disable_jumpstats", "timer_modifier_disable_teleports",
         "timer_modifier_disable_checkpoints", "timer_modifier_disable_pause", "timer_modifier_force_duck",
@@ -111,7 +141,7 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
 
     // Push triggers (cs2kz KZTRIGGER_PUSH): trigger origin → impulse (timer_push_amount). Basic add-to-velocity
     // on enter; the per-axis set-speed / condition / cooldown flags are refinements.
-    private readonly Dictionary<(int X, int Y, int Z), Vector> _pushesByOrigin = new();
+    private readonly Dictionary<(int X, int Y, int Z), KzMapPushData> _pushesByOrigin = new();
 
     private readonly Dictionary<(int X, int Y, int Z), float>         _antibhopsByOrigin = new();
     private readonly Dictionary<(int X, int Y, int Z), KzMapModifier> _modifiersByOrigin = new();
@@ -280,7 +310,30 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var pushOrigin)
                                  && TryParseOrigin(dict.GetValueOrDefault("timer_push_amount", ""), out var impulse))
                         {
-                            _pushesByOrigin[OriginKey(pushOrigin.X, pushOrigin.Y, pushOrigin.Z)] = impulse;
+                            var conditions = (KzPushCondition) 0;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_start_touch", ""))) conditions |= KzPushCondition.StartTouch;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_touch", "")))       conditions |= KzPushCondition.Touch;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_end_touch", "")))   conditions |= KzPushCondition.EndTouch;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_jump_event", "")))  conditions |= KzPushCondition.JumpEvent;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_jump_button", ""))) conditions |= KzPushCondition.JumpButton;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_attack", "")))      conditions |= KzPushCondition.Attack;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_attack2", "")))     conditions |= KzPushCondition.Attack2;
+                            if (ParseBool(dict.GetValueOrDefault("timer_push_condition_use", "")))         conditions |= KzPushCondition.Use;
+
+                            // Legacy/simple maps set no condition — treat as push-on-start-touch (matches
+                            // the previous instant-impulse behavior).
+                            if (conditions == 0)
+                                conditions = KzPushCondition.StartTouch;
+
+                            _pushesByOrigin[OriginKey(pushOrigin.X, pushOrigin.Y, pushOrigin.Z)] = new KzMapPushData(
+                                Impulse:          impulse,
+                                Conditions:       conditions,
+                                SetSpeedX:        ParseBool(dict.GetValueOrDefault("timer_push_abs_speed_x", "")),
+                                SetSpeedY:        ParseBool(dict.GetValueOrDefault("timer_push_abs_speed_y", "")),
+                                SetSpeedZ:        ParseBool(dict.GetValueOrDefault("timer_push_abs_speed_z", "")),
+                                CancelOnTeleport: ParseBool(dict.GetValueOrDefault("timer_push_cancel_on_teleport", "")),
+                                Cooldown:         ParseFloat(dict.GetValueOrDefault("timer_push_cooldown", ""), 0.1f),
+                                Delay:            ParseFloat(dict.GetValueOrDefault("timer_push_delay", ""), 0f));
                         }
                         else if (type == KzTriggerType.AntiBhop
                                  && TryParseOrigin(dict.GetValueOrDefault("origin", ""), out var abOrigin))
@@ -359,8 +412,8 @@ internal sealed unsafe class MapApiSourceModule : IModule, IMapApiSource
         return false;
     }
 
-    public bool TryResolvePush(Vector origin, out Vector impulse)
-        => _pushesByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out impulse);
+    public bool TryResolvePush(Vector origin, out KzMapPushData push)
+        => _pushesByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out push);
 
     public bool TryResolveAntiBhop(Vector origin, out float time)
         => _antibhopsByOrigin.TryGetValue(OriginKey(origin.X, origin.Y, origin.Z), out time);

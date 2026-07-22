@@ -291,6 +291,15 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
 
                 break;
             }
+            case EZoneType.Split:
+            {
+                // cs2kz split zone — a progress marker: announce the split time while a run is live.
+                // No PB-split comparison yet (we don't persist per-split times) — announce-only.
+                if (timerInfo.IsTimerRunning() && _bridge.ClientManager.GetGameClient(controller.PlayerSlot) is { IsFakeClient: false } splitClient)
+                    Loc.Chat(_bridge.LocalizerManager, splitClient, "Kreedz_Split", info.Data, Utils.FormatTime(timerInfo.Time, true));
+
+                break;
+            }
             case EZoneType.Checkpoint:
             {
                 if (!timerInfo.IsTimerRunning())
