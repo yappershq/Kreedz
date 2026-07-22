@@ -17,6 +17,7 @@ using Sharp.Shared.GameEntities;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
+using Kreedz.Shared.Models.Timer;
 
 namespace Kreedz.Modules;
 
@@ -149,7 +150,7 @@ internal sealed class ZtopwatchModule : IModule
         var tookOff  = !onGround && state.WasGround;
         state.WasGround = onGround;
 
-        if (_timerModule.GetTimerInfo(slot)?.Status == Kreedz.Shared.Models.Timer.ETimerStatus.Running)
+        if (_timerModule.GetTimerInfo(slot)?.Status == ETimerStatus.Running)
             return;
 
         if (_modes.GetMovementMode(slot)?.CanTouchTimerZone(slot) == false)
