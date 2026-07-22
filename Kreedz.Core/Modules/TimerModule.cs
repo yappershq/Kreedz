@@ -89,6 +89,8 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
 
     private readonly IConVar sv_standable_normal;
 
+    private readonly IMapApiSource _mapApi;
+
     public TimerModule(InterfaceBridge      bridge,
                        IPlayerManager       playerManager,
                        IZoneModule          zoneModule,
@@ -96,6 +98,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
                        IStyleModule         styleModule,
                        IEventHookManager    eventHook,
                        ICommandManager      commandManager,
+                       IMapApiSource        mapApiSource,
                        ILogger<TimerModule> logger)
     {
         _bridge         = bridge;
@@ -104,6 +107,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
         _mapInfoModule  = mapInfoModule;
         _styleModule    = styleModule;
         _eventHook      = eventHook;
+        _mapApi         = mapApiSource;
         _commandManager = commandManager;
 
         _logger      = logger;
@@ -187,7 +191,20 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
 
         if (info.Track != timerInfo.Track)
         {
-            return;
+            // cs2kz course switching: touching another course's START zone puts you on that course
+            // (any other zone type of a foreign course is ignored, as before).
+            if (info.ZoneType != EZoneType.Start)
+            {
+                return;
+            }
+
+            timerInfo.StopTimer();
+            timerInfo.ChangeTrack(info.Track);
+            stageTimer.StopTimer();
+            stageTimer.ChangeTrack(info.Track);
+
+            if (_bridge.ClientManager.GetGameClient(controller.PlayerSlot) is { IsFakeClient: false } switchClient)
+                Loc.Chat(_bridge.LocalizerManager, switchClient, "Kreedz_Course_Switched", CourseName(info.Track));
         }
 
         timerInfo.UpdateInZone(info.ZoneType);
@@ -382,6 +399,20 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
 
         timerInfo.UpdateInZone(info.ZoneType);
         stageTimer.UpdateInZone(info.ZoneType);
+    }
+
+    /// <summary>The mapping-API course name for a track, or the anonymous Main/Bonus label.</summary>
+    private string CourseName(int track)
+    {
+        foreach (var course in _mapApi.Registry.Courses.Values)
+        {
+            if (course.Number == track)
+            {
+                return course.Name;
+            }
+        }
+
+        return track == 0 ? "Main" : $"Bonus {track}";
     }
 
     public void OnZoneEndTouch(IZoneInfo info, IPlayerController controller, IPlayerPawn pawn)
