@@ -1,0 +1,168 @@
+digraph MovementFlow {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=22, labelloc=t,
+         label="CS2 Movement Flow  —  engine × ModSharp hook × cs2kz detour × Kreedz work\l(reproduced from the engine map; annotations = my analysis)",
+         bgcolor="#f7f9fc", nodesep=0.35, ranksep=0.5, splines=ortho, compound=true];
+  node  [fontname="Helvetica", fontsize=13, style="filled,rounded", shape=box, penwidth=1.4];
+  edge  [fontname="Helvetica", fontsize=11, color="#5a6b82", penwidth=1.2, arrowsize=0.8];
+
+  // ---------- spine ----------
+  e1 [label="CCSPlayerController::OnSimulateUserCommands\n0x180A098F0", fillcolor="#cfe0f3", color="#5b7fb0"];
+  e2 [label="CBasePlayerController::OnSimulateUserCommands\n0x180ACDFA0 · rebuild CUserCmd · max 3 queued cmds", fillcolor="#cfe0f3", color="#5b7fb0"];
+  e3 [label="MovementServices vfunc +176 (RunCommand_vt22)\n0x180A528A0", fillcolor="#d9ecfb", color="#5b7fb0"];
+  rc [label="CPlayer_MovementServices::RunCommand\n0x180BD26B0 · set tick / curtime / frametime", fillcolor="#bcd8f5", color="#37639e", penwidth=2.4];
+  orch [label="ProcessMovement_orchestrator\n0x180BD01F0 · SetupMoveData / SetupMove", fillcolor="#d9ecfb", color="#5b7fb0"];
+  loop [label="ProcessMovement_SubtickLoop\n0x180BC3910 · per-subtick simulation\n(reads m_arrForceSubtickMoveWhen + usercmd subticks)", fillcolor="#ffe8b3", color="#c98a19", penwidth=2.4];
+  pm [label="CCSPlayer_MovementServices::ProcessMove\n0x180A50740 · assign maxspeed", fillcolor="#bcd8f5", color="#37639e", penwidth=2.4];
+  disp [label="PlayerMove_dispatch\n0x180A4DC20", fillcolor="#d9ecfb", color="#5b7fb0"];
+  canmove [label="pawn CanMove? (vfunc +3280)", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+
+  e1 -> e2 -> e3 -> rc -> orch -> loop -> pm -> disp -> canmove;
+  loop -> loop [label="next subtick", color="#c98a19", fontcolor="#c98a19", constraint=false];
+
+  // ---------- hook annotations ----------
+  h_rc  [shape=note, fillcolor="#fff6cc", color="#b59a00", fontsize=12,
+         label="ModSharp: PlayerRunCommand (pre/post)\ncs2kz: —  (they use PhysicsSimulate above)\nKreedz CKZ: half-tick input snap, jump re-arm,\nforced-subtick -0.5 (pre) / +0.5 (post), once-per-tick"];
+  h_loop[shape=note, fillcolor="#ffe0b0", color="#c98a19", fontsize=12,
+         label="CONSUMPTION POINT of the forced-subtick array.\nMust be written ABOVE here → RunCommand pre = OK,\nProcessMove pre (below) = too late (per-subtick)."];
+  h_pm  [shape=note, fillcolor="#fff6cc", color="#b59a00", fontsize=12,
+         label="ModSharp: PlayerProcessMovePre/Post + PlayerGetMaxSpeed\ncs2kz: ProcessMovement / OnGetMaxSpeed\nKreedz CKZ: prestrafe accum, perf timing, SlopeFix\nKreedz AutoUnduck; Timer pause-freeze  · PER SUBTICK"];
+  h_top [shape=note, fillcolor="#e6f2d9", color="#6f9e3f", fontsize=12,
+         label="cs2kz PhysicsSimulate pre/post detours here\n(Metamod SourceHook). ModSharp has no hook here —\nno typed forward, no maintained gamedata sig."];
+  h_top -> e1 [style=dashed, color="#6f9e3f", arrowhead=none, constraint=false];
+  h_rc  -> rc [style=dashed, color="#b59a00", arrowhead=none, constraint=false];
+  h_loop-> loop [style=dashed, color="#c98a19", arrowhead=none, constraint=false];
+  h_pm  -> pm [style=dashed, color="#b59a00", arrowhead=none, constraint=false];
+
+  // ---------- life / cannot move ----------
+  subgraph cluster_life {
+    label="life / cannot-move  (CanMove==false)"; style=filled; fillcolor="#fbe6e6"; color="#d98a8a"; fontcolor="#b05656";
+    life_q [label="GetLifestate() != 0 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    life_dead [label="reason = dead", fillcolor="#f6c9c9", color="#c15b5b"];
+    life_cant [label="reason = cannot_move", fillcolor="#f6c9c9", color="#c15b5b"];
+    life_cp [label="CheckParameters\n0x180A34E00", fillcolor="#e2e6ea", color="#8a97a5"];
+    life_h [label="HandleCannotMove\n0x180A4E220", fillcolor="#f6c9c9", color="#c15b5b"];
+    life_g [label="FL_ONGROUND ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    life_gnd [label="grounded: clear input / vel / accel\nPreMoveStateUpdate", fillcolor="#f6c9c9", color="#c15b5b"];
+    life_air [label="airborne: half gravity\nStartGravity + PreMoveStateUpdate", fillcolor="#f6c9c9", color="#c15b5b"];
+    life_q -> life_dead; life_q -> life_cant; life_cant -> life_cp -> life_h -> life_g;
+    life_g -> life_gnd [label="yes"]; life_g -> life_air [label="no"];
+  }
+  canmove -> life_q [label="no"];
+
+  // ---------- prechecks / dispatch ----------
+  subgraph cluster_pre {
+    label="prechecks / dispatch  (per subtick)"; style=filled; fillcolor="#e7f0fb"; color="#8fb0d6"; fontcolor="#4a6c96";
+    cp [label="CheckParameters\n0x180A34E00", fillcolor="#e2e6ea", color="#8a97a5"];
+    hp [label="Health <= 0  or  flag 0x20 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    clr [label="clear forward / side / up move", fillcolor="#f6c9c9", color="#c15b5b"];
+    keep [label="keep command input", fillcolor="#e2e6ea", color="#8a97a5"];
+    prech [label="PlayerMove_PreChecks\n0x180A4E830", fillcolor="#e2e6ea", color="#8a97a5"];
+    ls2 [label="GetLifestate() == 2 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    skipstuck [label="skip part of stuck / position checks", fillcolor="#f6c9c9", color="#c15b5b"];
+    stuck [label="sub_180A35580\nstuck / position check", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    abort [label="return 0 · this move aborted", fillcolor="#f6c9c9", color="#c15b5b"];
+    catpos [label="CategorizePosition\n0x180A32EF0", fillcolor="#e2e6ea", color="#8a97a5"];
+    timed [label="timed movement timer != 0 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    timedv [label="apply timed velocity · decrement timer", fillcolor="#d4edd0", color="#6aa76a"];
+    timedtp [label="TryPlayerMove 0x180A56F90\n→ UpdateWaterLevel 0x180A36120", fillcolor="#d4edd0", color="#6aa76a"];
+    waterq [label="water level >= 3  and  moveType == WALK ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    mtype [label="moveType dispatch\n2 WALK · 4 TOSS · 7/8 SIMPLE · 9 SPECIAL", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    cp -> hp; hp -> clr [label="yes"]; hp -> keep [label="no"]; clr -> prech; keep -> prech;
+    prech -> ls2; ls2 -> skipstuck [label="yes"]; ls2 -> stuck [label="no"];
+    stuck -> abort [label="fail"]; stuck -> catpos [label="pass"]; skipstuck -> catpos;
+    catpos -> timed; timed -> timedv [label="yes"]; timedv -> timedtp; timed -> waterq [label="no"];
+    waterq -> mtype [label="no"];
+  }
+  canmove -> cp [label="yes"];
+
+  // ---------- water ----------
+  subgraph cluster_water {
+    label="water"; style=filled; fillcolor="#dff3ef"; color="#7fc4b6"; fontcolor="#3f8878";
+    wmw [label="WaterMove_wrapper\n0x180A4EE10", fillcolor="#c6ebe2", color="#3f8878"];
+    wm [label="WaterMove\n0x180A5AFA0", fillcolor="#c6ebe2", color="#3f8878"];
+    wmv [label="water wish vel · friction / accel / buoyancy", fillcolor="#c6ebe2", color="#3f8878"];
+    wmf [label="FinishGravity · TryPlayerMove / sweep / step", fillcolor="#c6ebe2", color="#3f8878"];
+    wmw -> wm -> wmv -> wmf;
+  }
+  waterq -> wmw [label="yes"];
+
+  // ---------- walk ----------
+  subgraph cluster_walk {
+    label="moveType 2 · WALK / AIR"; style=filled; fillcolor="#e5f4de"; color="#8dc47a"; fontcolor="#4e8a37";
+    wkw [label="WalkMove_wrapper\n0x180A4E460", fillcolor="#cfeec2", color="#4e8a37"];
+    jc [label="legacy / modern JumpCheck", fillcolor="#cfeec2", color="#4e8a37"];
+    wkg [label="FL_ONGROUND ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    wk [label="WalkMove\n0x180A5A0C0", fillcolor="#cfeec2", color="#4e8a37"];
+    wkin [label="view angles + input · wishdir / wishspeed", fillcolor="#e5f4de", color="#4e8a37"];
+    fr [label="Friction\n0x180A3B380", fillcolor="#cfeec2", color="#4e8a37"];
+    acc [label="AccelerateIfAllowed\n0x180A2E980", fillcolor="#cfeec2", color="#4e8a37"];
+    lim [label="limit maxspeed · add base velocity", fillcolor="#e5f4de", color="#4e8a37"];
+    tpm1 [label="TryPlayerMove\n0x180A56F90", fillcolor="#cfeec2", color="#4e8a37"];
+    stepq [label="need step ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    step [label="StepMove\n0x180A555B0", fillcolor="#cfeec2", color="#4e8a37"];
+    rbv [label="RemoveBaseVelocity / StayOnGround\n0x180A55270", fillcolor="#cfeec2", color="#4e8a37"];
+    wkw -> jc -> wkg;
+    wkg -> wk [label="yes"]; wk -> wkin -> fr -> acc -> lim -> tpm1 -> stepq;
+    stepq -> step [label="yes"]; step -> rbv; stepq -> rbv [label="no"];
+  }
+  mtype -> wkw [label="2 WALK"];
+
+  subgraph cluster_air {
+    label="AIR (airborne walk)"; style=filled; fillcolor="#efe7fb"; color="#b199e0"; fontcolor="#6f4fb0";
+    air [label="AirMove\n0x180A54430", fillcolor="#e0d3f7", color="#6f4fb0"];
+    airin [label="air wishdir / wishspeed", fillcolor="#efe7fb", color="#6f4fb0"];
+    airls [label="GetLifestate() == 2 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    airacc [label="AirAccelerate\n0x180A2F2A0", fillcolor="#e0d3f7", color="#6f4fb0"];
+    airskip [label="skip AirAccelerate", fillcolor="#f6c9c9", color="#c15b5b"];
+    airgrav [label="AddGravity\n0x180A2F050", fillcolor="#e0d3f7", color="#6f4fb0"];
+    airfg [label="FinishGravity\n0x180A503E0", fillcolor="#e0d3f7", color="#6f4fb0"];
+    airtpm [label="TryPlayerMove", fillcolor="#e0d3f7", color="#6f4fb0"];
+    airrbv [label="RemoveBaseVelocityPostMove\n0x180A4FE90", fillcolor="#e0d3f7", color="#6f4fb0"];
+    air -> airin -> airls; airls -> airskip [label="yes"]; airls -> airacc [label="no"];
+    airacc -> airgrav; airskip -> airgrav; airgrav -> airfg -> airtpm -> airrbv;
+  }
+  wkg -> air [label="no"];
+
+  // ---------- simple velocity ----------
+  subgraph cluster_simple {
+    label="moveType 7/8 · SIMPLE / 9 SPECIAL"; style=filled; fillcolor="#eceef1"; color="#a7b2bf"; fontcolor="#5a6675";
+    sv [label="SimpleVelocityMove\n0x180A3B600", fillcolor="#dde2e8", color="#5a6675"];
+    svo [label="origin += velocity * frametime\noptional clear velocity / accel", fillcolor="#e2e6ea", color="#5a6675"];
+    sv9 [label="moveType 9 SPECIAL", fillcolor="#dde2e8", color="#5a6675"];
+    svq [label="can switch back to WALK ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    svelse [label="otherwise: UpdateWaterLevel\nJump / Gravity / TryPlayerMove", fillcolor="#e2e6ea", color="#5a6675"];
+    sv -> svo -> sv9 -> svq; svq -> svelse [label="no"];
+  }
+  mtype -> sv [label="7/8"];
+
+  // ---------- full toss ----------
+  subgraph cluster_toss {
+    label="moveType 4 · TOSS"; style=filled; fillcolor="#fdecd9"; color="#e6b071"; fontcolor="#b5762a";
+    ft [label="FullTossMove\n0x180A3B6E0", fillcolor="#fadcbb", color="#b5762a"];
+    ftin [label="input → wishdir · AccelerateIfAllowed", fillcolor="#fdecd9", color="#b5762a"];
+    ftq [label="moveType == 4 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    ftgrav [label="AddGravity", fillcolor="#fadcbb", color="#b5762a"];
+    ftskip [label="skip gravity", fillcolor="#fadcbb", color="#b5762a"];
+    ftbase [label="add base velocity · delta = velocity * frametime", fillcolor="#fdecd9", color="#b5762a"];
+    ftpush [label="TossMove_PushMove\n0x180A50EA0 · trace / sweep", fillcolor="#fadcbb", color="#b5762a"];
+    fttq [label="trace fraction < 1 ?", shape=diamond, fillcolor="#ffe9b0", color="#c98a19"];
+    ftimp [label="ResolveImpact\n0x180A4C950", fillcolor="#fadcbb", color="#b5762a"];
+    ftw [label="UpdateWaterLevel", fillcolor="#c6ebe2", color="#3f8878"];
+    ft -> ftin -> ftq; ftq -> ftgrav [label="yes"]; ftq -> ftskip [label="no"];
+    ftgrav -> ftbase; ftskip -> ftbase; ftbase -> ftpush -> fttq;
+    fttq -> ftimp [label="yes"]; ftimp -> ftw; fttq -> ftw [label="no"];
+  }
+  mtype -> ft [label="4 TOSS"];
+
+  // ---------- finish / commit ----------
+  subgraph cluster_finish {
+    label="finish / commit"; style=filled; fillcolor="#efe9f6"; color="#b3a0d0"; fontcolor="#6f5aa0";
+    fin [label="FinishMove_PostMove\n0x180A4E590", fillcolor="#ded0ef", color="#6f5aa0"];
+    fincat [label="CategorizePosition\nground trace / water / ground entity", fillcolor="#ded0ef", color="#6f5aa0"];
+    fincf [label="CheckFalling\nlanding speed / damage / sounds", fillcolor="#ded0ef", color="#6f5aa0"];
+    finsub [label="FinishMove per subtick\nSetAbsOrigin / SetAbsVelocity", fillcolor="#ded0ef", color="#6f5aa0"];
+    fin -> fincat; fin -> fincf; fin -> finsub;
+  }
+  rbv -> fin; airrbv -> fin; wmf -> fin; svelse -> fin; ftw -> fin;
+  finsub -> loop [label="next subtick", color="#c98a19", fontcolor="#c98a19", constraint=false, style=dashed];
+}
