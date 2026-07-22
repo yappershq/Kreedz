@@ -60,6 +60,14 @@ public sealed class KreedzJumpstats : IModSharpModule
     private readonly float[] _edge        = new float[PlayerSlot.MaxPlayerCount];
     private readonly float[] _landingEdge = new float[PlayerSlot.MaxPlayerCount];
 
+    // Failstat (cs2kz UpdateFailstat, tick resolution): when a block jump dips below the takeoff plane,
+    // interpolate the crossing, mirror it to estimate the target block, and verify with the same hull
+    // sweeps — a failed jump then reports "how far it would have been" instead of nothing.
+    private readonly bool[]   _fsValid    = new bool[PlayerSlot.MaxPlayerCount];
+    private readonly float[]  _fsDistance = new float[PlayerSlot.MaxPlayerCount];
+    private readonly float[]  _fsOffset   = new float[PlayerSlot.MaxPlayerCount];
+    private readonly Vector[] _prevOrigin = new Vector[PlayerSlot.MaxPlayerCount];
+
     private IKzStyleRegistry?     _styles;
     private IKzModeRegistry?      _mode;      // resolved cross-plugin to pick the per-mode tier table
     private IRequestManager?      _request;   // resolved cross-plugin for jump persistence
@@ -183,6 +191,8 @@ public sealed class KreedzJumpstats : IModSharpModule
             _deadairTicks[slot]  = 0;
             _width[slot]         = 0f;
             _aaCalls[slot].Clear();
+            _fsValid[slot]       = false;
+            _prevOrigin[slot]    = origin;
         }
         else if (!onGround && _tracking[slot])
         {
@@ -210,6 +220,28 @@ public sealed class KreedzJumpstats : IModSharpModule
 
             _lastSpeed[slot] = horiz;
             _lastYaw[slot]   = yaw;
+
+            // Failstat (cs2kz UpdateFailstat): latch the first descending crossing below the takeoff plane.
+            var blockHeight = _takeoff[slot].Z;
+            if (origin.Z >= blockHeight)
+            {
+                _fsValid[slot] = false; // provisional until we STAY below the plane (cs2kz semantics)
+            }
+            else if (!_fsValid[slot] && _prevOrigin[slot].Z > blockHeight)
+            {
+                var dz = origin.Z - _prevOrigin[slot].Z;
+                if (dz < -JsEpsilon)
+                {
+                    var scale = (blockHeight - _prevOrigin[slot].Z) / dz;
+                    var crossing = new Vector(
+                        _prevOrigin[slot].X + (origin.X - _prevOrigin[slot].X) * scale,
+                        _prevOrigin[slot].Y + (origin.Y - _prevOrigin[slot].Y) * scale,
+                        blockHeight);
+                    TryLatchFailstat(slot, crossing);
+                }
+            }
+
+            _prevOrigin[slot] = origin;
         }
         else if (!_wasOnGround[slot] && onGround && _tracking[slot])
         {
@@ -219,10 +251,15 @@ public sealed class KreedzJumpstats : IModSharpModule
             var dy   = origin.Y - _takeoff[slot].Y;
             var dist = MathF.Sqrt(dx * dx + dy * dy) + OffsetUnits;
 
-            // cs2kz EndBlockDistance — block/edge on gap jumps past the minimum block distance.
-            _block[slot] = 0f; _edge[slot] = -1f; _landingEdge[slot] = -1f;
-            if (_type[slot] is not (JumpType.LadderJump or JumpType.Fall or JumpType.Other) && dist >= MinBlockDistance)
-                CalcBlockStats(slot, _takeoff[slot], origin);
+            // cs2kz EndBlockDistance — block/edge on gap jumps past the minimum block distance. When a
+            // failstat latched mid-air, its block/edge estimate wins for reporting (cs2kz preserves the
+            // failstat values through EndBlockDistance).
+            if (!_fsValid[slot])
+            {
+                _block[slot] = 0f; _edge[slot] = -1f; _landingEdge[slot] = -1f;
+                if (_type[slot] is not (JumpType.LadderJump or JumpType.Fall or JumpType.Other) && dist >= MinBlockDistance)
+                    CalcBlockStats(slot, _takeoff[slot], origin);
+            }
 
             if (_styles?.HasAnyStyle(slot) != true) // styled runs don't count (1:1); GetTier gates the distance
                 Report(slot, _type[slot], dist);
@@ -268,10 +305,15 @@ public sealed class KreedzJumpstats : IModSharpModule
     {
         if (type is JumpType.Fall or JumpType.Other) return; // not a scored jump
 
-        var tier = GetTier(slot, type, distance);
-        if (tier == DistanceTier.None) return;
+        // Failstat report (cs2kz IsFailstat): the jump missed the block — show what it WOULD have been.
+        var isFailstat = _fsValid[slot];
+        if (isFailstat)
+            distance = _fsDistance[slot];
 
-        var label = Label(type);
+        var tier = GetTier(slot, type, distance);
+        if (tier == DistanceTier.None && !isFailstat) return;
+
+        var label = (isFailstat ? "FS-" : "") + Label(type);
         var gain  = _maxSpeed[slot] - _takeoffSpeed[slot];
 
         // Prefer the bit-exact cs2kz Strafe::End stats from the native AACall stream; fall back to the per-tick
@@ -294,13 +336,14 @@ public sealed class KreedzJumpstats : IModSharpModule
             ? $" · {_block[slot]:0} block · {_edge[slot]:0.0} edge · {_landingEdge[slot]:0.0} land"
             : "";
 
+        var verdict = isFailstat ? "missed" : $"{tier}!";
         client.Print(HudPrintChannel.Chat,
-            $"{label}: {distance:0.0}u — {tier}!  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad{effStr} · " +
+            $"{label}: {distance:0.0}u — {verdict}  |  {_strafes[slot]} strafes · {sync:0}% sync · {badAng:0}% bad{effStr} · " +
             $"{_maxSpeed[slot]:0} max · {gain:+0;-0} gain · {_maxHeight[slot]:0.0}u height · " +
             $"{overlap:0}% ovl · {deadair:0}% air · {width:0}° width{ext}{blockStr}");
 
-        // Persist the jump (jumpstats DB) — fire-and-forget, degrades to no-op without the request manager.
-        if (_request is { } req)
+        // Persist the jump (jumpstats DB) — fire-and-forget; failed (failstat) jumps are never records.
+        if (!isFailstat && _request is { } req)
             _ = SaveJumpAsync(req, client.SteamId, label, distance, _strafes[slot], sync, gain, _maxSpeed[slot], _maxHeight[slot]);
     }
 
@@ -377,8 +420,52 @@ public sealed class KreedzJumpstats : IModSharpModule
         return false;
     }
 
-    // cs2kz CalcBlockStats (success-landing path; the failstat checkOffset branch is failstat-only).
-    private void CalcBlockStats(PlayerSlot slot, Vector takeoff, Vector landing)
+    // cs2kz UpdateFailstat latch: mirror the crossing around takeoff to estimate the target block face,
+    // verify it with the standard block sweeps (+ the surface-height check), then keep the estimate.
+    private void TryLatchFailstat(PlayerSlot slot, Vector crossing)
+    {
+        var takeoff = _takeoff[slot];
+        var dx      = crossing.X - takeoff.X;
+        var dy      = crossing.Y - takeoff.Y;
+        var rawDist = MathF.Sqrt(dx * dx + dy * dy);
+        if (rawDist < MinBlockDistance || _physics is null)
+            return;
+
+        var coordDist = MathF.Abs(dx) < MathF.Abs(dy) ? 1 : 0;
+        var blockEst  = takeoff;
+        blockEst[coordDist]     = 2f * crossing[coordDist] - takeoff[coordDist];
+        blockEst[1 - coordDist] = crossing[1 - coordDist];
+        blockEst.Z              = crossing.Z;
+
+        _block[slot] = 0f; _edge[slot] = -1f; _landingEdge[slot] = -1f;
+        CalcBlockStats(slot, takeoff, blockEst, checkOffset: true);
+        if (_block[slot] > 0f)
+        {
+            _fsValid[slot]    = true;
+            _fsDistance[slot] = rawDist + OffsetUnits;
+            _fsOffset[slot]   = crossing.Z - takeoff.Z;
+        }
+    }
+
+    // Downward point scan for the block's top surface Z (cs2kz FindBlockHeight); NaN on failure.
+    private float FindBlockHeight(Vector origin, float offset, int coordDist, float searchArea)
+    {
+        var start = origin;
+        start[coordDist] += offset;
+        var end = start;
+        start.Z += searchArea;
+        end.Z   -= searchArea;
+
+        var r = _physics!.TraceLineNoPlayers(start, end, WorldMask, CollisionGroupType.Default, TraceQueryFlag.All);
+        if (!r.DidHit() || MathF.Abs(r.PlaneNormal.Z - 1f) > JsEpsilon)
+            return float.NaN;
+
+        return r.EndPosition.Z;
+    }
+
+    // cs2kz CalcBlockStats. checkOffset (failstat path) additionally verifies the estimated block's top
+    // surface actually sits at the crossing plane before trusting the estimate.
+    private void CalcBlockStats(PlayerSlot slot, Vector takeoff, Vector landing, bool checkOffset = false)
     {
         // GetCoordOrientation: dominant horizontal axis + direction of the jump.
         var coordDist = MathF.Abs(landing.X - takeoff.X) < MathF.Abs(landing.Y - takeoff.Y) ? 1 : 0;
@@ -409,7 +496,17 @@ public sealed class KreedzJumpstats : IModSharpModule
             return;
 
         if (!BlockAreEdgesParallel(startBlock, endBlock, deviation + 32f, coordDist, coordDev))
-            return; // _block already zeroed at landing
+            return; // _block already zeroed by the caller
+
+        // Failstat path: the estimated block's surface must be at the crossing plane (cs2kz checkOffset).
+        if (checkOffset)
+        {
+            var checkPos = endBlock;
+            checkPos.Z += 1f;
+            var surfZ = FindBlockHeight(checkPos, distSign * 17f, coordDist, 1f);
+            if (float.IsNaN(surfZ) || MathF.Abs(surfZ - landing.Z) > OffsetEpsilon)
+                return;
+        }
 
         var rawBlock = MathF.Abs(endBlock[coordDist] - startBlock[coordDist]);
         var block    = MathF.Round(rawBlock);
