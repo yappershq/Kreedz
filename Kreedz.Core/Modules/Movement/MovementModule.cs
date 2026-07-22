@@ -184,10 +184,27 @@ internal sealed unsafe class MovementModule : IModule, IKzMovementTelemetry
         ((delegate* unmanaged<nint, nint, byte, void>)_tCategorize)(ms, mv, stayOnGround);
     }
 
+    // TryPlayerMove entry capture for the triggerfix bump-path replay (cs2kz VNL OnTryPlayerMove):
+    // TriggerModifierModule re-predicts the bump path from these exact engine inputs after the tick.
+    internal static readonly Vector[] TpmOrigin   = new Vector[PlayerSlot.MaxPlayerCount];
+    internal static readonly Vector[] TpmVelocity = new Vector[PlayerSlot.MaxPlayerCount];
+    internal static readonly float[]  TpmTime     = new float[PlayerSlot.MaxPlayerCount];
+    internal static readonly int[]    TpmTick     = new int[PlayerSlot.MaxPlayerCount];
+
     [UnmanagedCallersOnly]
     private static void Hk_TryPlayerMove(nint ms, nint mv, nint firstDest, nint firstTrace, nint blocked)
     {
         var (slot, mode) = Resolve(ms);
+
+        if (_self is { } self)
+        {
+            ref var move = ref Move(mv);
+            TpmOrigin[slot]   = move.AbsOrigin;
+            TpmVelocity[slot] = move.Velocity;
+            TpmTime[slot]     = self._bridge.GlobalVars.FrameTime;
+            TpmTick[slot]     = self._bridge.GlobalVars.TickCount;
+        }
+
         mode?.OnTryPlayerMovePre(slot, ms, mv);
         ((delegate* unmanaged<nint, nint, nint, nint, nint, void>)_tTryPlayerMove)(ms, mv, firstDest, firstTrace, blocked);
         mode?.OnTryPlayerMovePost(slot, ms, mv);

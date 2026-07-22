@@ -85,6 +85,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
     }
 
     private readonly IMapApiSource _mapApi;
+    private Sharp.Shared.Objects.IConVar? _svStandableNormal;
 
     public TriggerModifierModule(InterfaceBridge bridge, IMapApiSource mapApiSource, ILogger<TriggerModifierModule> logger)
     {
@@ -95,6 +96,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
 
     public bool Init()
     {
+        _svStandableNormal = _bridge.ConVarManager.FindConVar("sv_standable_normal");
         _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _bridge.HookManager.PlayerProcessMovePost.InstallForward(OnProcessMovePost);
         _bridge.HookManager.PlayerRunCommand.InstallHookPre(OnRunCommandPre);
@@ -462,6 +464,8 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
 
     private readonly Vector[] _preOrigin = new Vector[PlayerSlot.MaxPlayerCount];
 
+    private static readonly List<Vector> PathScratch = new(8);
+
     private void OnProcessMovePost(IPlayerProcessMoveForwardParams arg)
     {
         var client = arg.Client;
@@ -474,9 +478,31 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         if (pawn.ActualMoveType == MoveType.NoClip)
             return;
 
-        var from = _preOrigin[slot];
-        var to   = pawn.GetAbsOrigin();
+        // Bump-segment path replay (cs2kz VNL OnTryPlayerMove): when the engine ran TryPlayerMove this
+        // tick for an airborne move, re-predict its bump path from the exact captured inputs and sweep
+        // every bump-to-bump pair — a path that bends around a corner mid-tick can't cut triggers.
+        if (MovementModule.TpmTick[slot] == _bridge.GlobalVars.TickCount && !_onGround[slot])
+        {
+            PredictBumpPath(pawn,
+                MovementModule.TpmOrigin[slot],
+                MovementModule.TpmVelocity[slot],
+                MovementModule.TpmTime[slot],
+                PathScratch);
 
+            if (PathScratch.Count > 1)
+            {
+                for (var i = 0; i < PathScratch.Count - 1; i++)
+                    SweepSegment(slot, pawn, PathScratch[i], PathScratch[i + 1]);
+
+                return; // path replay covered the tick — single-segment fallback not needed
+            }
+        }
+
+        SweepSegment(slot, pawn, _preOrigin[slot], pawn.GetAbsOrigin());
+    }
+
+    private void SweepSegment(PlayerSlot slot, Sharp.Shared.GameEntities.IPlayerPawn pawn, Vector from, Vector to)
+    {
         var dx = to.X - from.X;
         var dy = to.Y - from.Y;
         var dz = to.Z - from.Z;
@@ -532,6 +558,125 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
                 // Crossed within one tick = a start-touch + touch that the overlap scan never saw.
                 if ((push.Conditions & (KzPushCondition.StartTouch | KzPushCondition.Touch)) != 0)
                     AddPushEvent(slot, handle, push);
+            }
+        }
+    }
+
+    // ─── cs2kz VNL OnTryPlayerMove — CS2 TryPlayerMove re-prediction (bump/clip loop) ───
+    //
+    // Reproduces the engine's TryPlayerMove from the captured entry inputs purely to collect the
+    // position at each bump (wall clip) — the sweep pairs. Faithful except: the jump-precision error
+    // term (m_flAccumulatedJumpError, unexposed; sub-0.03u effect) and the sv_bounce/surface-friction
+    // overbounce factor (both mode tables set sv_bounce 0 → factor is exactly 1).
+
+    private static void ClipVelocity(in Vector inVel, in Vector normal, out Vector outVel, float overbounce)
+    {
+        var backoff = -((normal.X * inVel.X) + (normal.Y * inVel.Y) + (normal.Z * inVel.Z)) * overbounce;
+        backoff = MathF.Max(backoff, 0f) + 0.03125f;
+        outVel = new Vector(normal.X * backoff + inVel.X, normal.Y * backoff + inVel.Y, normal.Z * backoff + inVel.Z);
+    }
+
+    private void PredictBumpPath(Sharp.Shared.GameEntities.IPlayerPawn pawn, Vector origin, Vector velocity, float timeLeft, List<Vector> outOrigins)
+    {
+        outOrigins.Clear();
+
+        var col = pawn.GetCollisionProperty();
+        if (col is null || timeLeft <= 0f)
+            return;
+
+        var hull = new TraceShapeRay(new TraceShapeHull { Mins = col.Mins, Maxs = col.Maxs });
+        var standableZ = _svStandableNormal?.GetFloat() ?? 0.7f;
+
+        Span<Vector> planes = stackalloc Vector[5];
+        var numplanes        = 0;
+        var originalVelocity = velocity;
+        var primalVelocity   = velocity;
+        var allFraction      = 0f;
+
+        for (var bump = 0; bump < 4; bump++)
+        {
+            var speed = MathF.Sqrt(velocity.X * velocity.X + velocity.Y * velocity.Y + velocity.Z * velocity.Z);
+            if (speed == 0f)
+                break;
+
+            var end = new Vector(origin.X + velocity.X * timeLeft, origin.Y + velocity.Y * timeLeft, origin.Z + velocity.Z * timeLeft);
+            if (numplanes == 1)
+                end += planes[0] * 0.03125f;
+
+            var attr = RnQueryShapeAttr.PlayerMovement(col.CollisionAttribute.InteractsWith);
+            attr.SetEntityToIgnore(pawn, 0);
+            var pm = _bridge.PhysicsQueryManager.TraceShape(hull, origin, end, attr);
+
+            var fraction = pm.Fraction;
+            if (allFraction == 0f && fraction < 1f && speed * timeLeft >= 0.03125f && fraction * speed * timeLeft < 0.03125f)
+                fraction = 0f;
+
+            if (fraction * MathF.Max(1f, speed) > 0.03125f)
+            {
+                origin           = pm.EndPosition;
+                originalVelocity = velocity;
+                numplanes        = 0;
+            }
+
+            allFraction += fraction;
+            outOrigins.Add(pm.EndPosition);
+
+            if (fraction == 1f)
+                break;
+
+            timeLeft -= fraction * timeLeft;
+
+            if (numplanes >= 5)
+                break;
+
+            var normal = pm.PlaneNormal;
+
+            // Standable-landing stop (cs2kz 2024-11-07): descending onto standable ground with ~no 2D speed.
+            if (velocity.Z < 0f && normal.Z >= standableZ
+                && MathF.Sqrt(velocity.X * velocity.X + velocity.Y * velocity.Y) < 1f)
+                break;
+
+            planes[numplanes++] = normal;
+
+            if (numplanes == 1)
+            {
+                ClipVelocity(originalVelocity, planes[0], out var clipped, 1f);
+                velocity         = clipped;
+                originalVelocity = clipped;
+            }
+            else
+            {
+                int i, j;
+                for (i = 0; i < numplanes; i++)
+                {
+                    ClipVelocity(originalVelocity, planes[i], out velocity, 1f);
+                    for (j = 0; j < numplanes; j++)
+                        if (j != i && velocity.X * planes[j].X + velocity.Y * planes[j].Y + velocity.Z * planes[j].Z < 0f)
+                            break;
+                    if (j == numplanes)
+                        break;
+                }
+
+                if (i == numplanes)
+                {
+                    if (numplanes != 2)
+                        break;
+
+                    // Slide along the crease of the two planes.
+                    var dir = new Vector(
+                        planes[0].Y * planes[1].Z - planes[0].Z * planes[1].Y,
+                        planes[0].Z * planes[1].X - planes[0].X * planes[1].Z,
+                        planes[0].X * planes[1].Y - planes[0].Y * planes[1].X);
+                    var len = MathF.Sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
+                    if (len < 1e-6f)
+                        break;
+                    dir *= 1f / len;
+                    var d = dir.X * velocity.X + dir.Y * velocity.Y + dir.Z * velocity.Z;
+                    velocity = dir * d;
+                }
+
+                if (velocity.X * primalVelocity.X + velocity.Y * primalVelocity.Y + velocity.Z * primalVelocity.Z <= 0f)
+                    break;
             }
         }
     }
