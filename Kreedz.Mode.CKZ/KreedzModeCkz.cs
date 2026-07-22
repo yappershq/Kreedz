@@ -21,6 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
 using Sharp.Shared.Enums;
+using Sharp.Shared.GameObjects;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
@@ -82,6 +83,12 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     // remembered pre-landing velocity instead of the clipped current one.
     private readonly Vector[] _lastAirVelocity = new Vector[PlayerSlot.MaxPlayerCount];
 
+    // cs2kz OnSetupMove half-tick input quantization: player subtick inputs snap to {0, 0.5} tick
+    // boundaries, and a jump press >0.5 tick after the last release re-arms OldJumpPressed. This is the
+    // defining CKZ input feel. (cs2kz ALSO force-injects half-tick subtick moves via the movement
+    // service's m_arrForceSubtickMoveWhen array — that field isn't exposed by ModSharp, so the injection
+    // half is documented as pending; the input-snap half below is what a player actually feels.)
+
     // slopefix per-player state (the native detours only get a CCSPlayer_MovementServices*; Core resolves
     // the slot and hands it to us, so no {ms->slot} map is needed here anymore — Core owns that).
     private readonly Vector[] _lastPlane = new Vector[PlayerSlot.MaxPlayerCount];
@@ -121,6 +128,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     {
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
+        _hookManager.PlayerRunCommand.InstallHookPre(OnRunCommandPre); // half-tick input quantization
         _tpmEnabled = _tpm?.GetBool() == true;
         return true;
     }
@@ -145,6 +153,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     {
         _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
         _hookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
+        _hookManager.PlayerRunCommand.RemoveHookPre(OnRunCommandPre);
     }
 
     private bool IsCkz(PlayerSlot slot)
@@ -200,6 +209,37 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
         CalcPrestrafe(slot, arg.Pawn.GetAbsVelocity(), onGround, frametime, curtime);
 
         _wasGround[slot] = onGround;
+    }
+
+    // cs2kz KZClassicModeService::OnSetupMove — quantize CKZ players' subtick inputs to {0, 0.5} tick
+    // boundaries and re-arm the legacy jump latch when a jump press lands >0.5 tick after the last release.
+    // Attack/attack2/reload subtick steps are left untouched (cs2kz skips them). Runs pre-command so the
+    // engine's movement processing sees the snapped inputs.
+    private HookReturnValue<EmptyHookReturn> OnRunCommandPre(IPlayerRunCommandHookParams param, HookReturnValue<EmptyHookReturn> ret)
+    {
+        var client = param.Client;
+        if (!client.IsValid || client.IsFakeClient || !IsCkz(client.Slot))
+            return ret;
+
+        var moves = param.SubtickMoveSize;
+        for (var i = 0; i < moves; i++)
+        {
+            var step = param.GetSubtickMove(i);
+            if (step == null)
+                continue;
+
+            var button = step->Buttons;
+            if (button is UserCommandButtons.Attack or UserCommandButtons.Attack2 or UserCommandButtons.Reload)
+                continue;
+
+            // NOTE: cs2kz also re-arms the legacy jump latch (m_bOldJumpPressed) on a jump press >0.5 tick
+            // after the last release. That field isn't on the movement-service interface this plugin builds
+            // against (NuGet Sharp.Shared), so the latch re-arm is pending; the when-snap below is the
+            // defining input quantization and stands on its own.
+            step->When = step->When >= 0.5f ? 0.5f : 0f; // the half-tick quantization
+        }
+
+        return ret;
     }
 
     // ── IKzMovementMode — native movement callbacks (Core installs the detours; we supply the physics) ──
