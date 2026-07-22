@@ -18,6 +18,35 @@ Start/End/Stage/Checkpoint zones. Verified on kz_pom (1 course, 2 zones) vs de_d
 1:1 zones:** the TriggerFix anti-dodge trace re-detection, the modifier/antibhop/teleport/push/bhop-counter
 trigger types, the ZoneSplit type, and multi-course track mapping.
 
+
+## Parity review (2026-07-22, 6× Fable-model agents, value-level vs cs2kz)
+
+**Verdict: the math/constant layer is 1:1** — all 66 mode-convar values character-exact, all 84 jumpstats
+tier numbers exact, block/failstat/miss formulas exact, trigger keyvalue defaults + push machinery + teleport
+rotation math exact, bhop-window + strafe-optimizer AC constants exact, DecalTrace sig byte-identical.
+
+**Fixed (3 batches, deployed + clean-boot verified):**
+- AC false-BAN vectors: per-slot state now resets on connect/disconnect (was inheriting prior occupant's
+  chains + ban counter); removed the tick-level nulls detector (6-32× over-aggressive vs cs2kz subtick);
+  9-of-11 cvar checks were silently dead (GetConVarValue = userinfo only) → async QueryConVar + sv_cheats
+  grace; snaptap/desubtick now kick-only (never autoban).
+- Jumpstats: LadderJump no longer gets the +32 model offset; strafe count segments (reversals+1); width is
+  per-strafe average; perf window 3 ticks (0.05s); airtime cap (0.8s / 1.04s ladder) invalidates long flights.
+- Timer/records: checkpoints purge on start-zone touch + disconnect (was surviving runs/maps/slot-reuse);
+  !goto blocked mid-run; LiteDB record fetch dedups per (player, MODE) — a faster VNL time no longer erases
+  the CKZ record; mode/style re-issue is a no-op (was killing live runs).
+- Triggers: push JumpEvent gated on a real jump (not any ledge-leave); cancel-on-teleport drops ALL flagged
+  events; anti_bhop_time clamped >=0.
+- Quiet: sound emitters resolved through weapon/item owners; spectated target exempt from hide+mute.
+- VNL slot3 gated on alive; satellite locales double-braced + filename suffix fixed.
+
+**Scoped, not yet fixed (documented, lower risk):** CKZ half-tick input quantization (subtick machinery
+absent — feel deviation, not a wrong value); SlopeFix/perf-window one-tick-late timing base; end-zone
+finish doesn't yet reject skipped checkpoints/stages; mode-blind display reads on some cache tiers
+(data now preserved, display filter partial); ResetCheckpoints/SingleBhopReset map-trigger runtime handlers;
+grounded-push base-velocity path; env_beam/decal visuals world-global (cs2kz owner-private). Full finding
+lists in the session transcript.
+
 ## Verdict matrix
 
 | Subsystem | Verdict | Reality |
