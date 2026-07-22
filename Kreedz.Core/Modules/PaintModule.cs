@@ -1,10 +1,12 @@
 /*
- * !paint — cs2kz paint, ModSharp edition. cs2kz paints persistent decals at bhop spots via the
- * CMsgPlaceDecalEvent net-message hook (color/size/per-viewer filtering) — ModSharp exposes no
- * net-message hook, so the same practical feature (marking your takeoff spots to read your bhop
- * lines) ships as small persistent X-marks from a reused env_beam ring: green = perf takeoff,
- * red = non-perf. Preference-persisted ("paint"). Per-viewer filtering + decal styling are the
- * documented deviation until ModSharp grows the hook.
+ * !paint — cs2kz paint. Marks every takeoff spot so you can read your bhop lines: green = perf,
+ * red = non-perf. Preference-persisted ("paint").
+ *
+ * Primary path = REAL engine decals, exactly like cs2kz: UTIL_DecalTrace (sig via kreedz-paint
+ * gamedata) fires the decal at a downward ground trace, with the symbol from tier0's exported
+ * _MakeGlobalSymbol("paint"); the resulting GE_PlaceDecalEvent is recolored in a PostEventAbstract
+ * hook while our pendingPaint flag is set (cs2kz's exact recolor mechanism, ABGR). If either native
+ * fails to resolve on a new build, the module falls back automatically to the env_beam X-mark ring.
  */
 
 using System;
@@ -12,14 +14,112 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.GameEntities;
+using Sharp.Shared.HookParams;
+using System.Runtime.CompilerServices;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
 
 namespace Kreedz.Modules;
 
-internal sealed class PaintModule : IModule
+internal sealed unsafe class PaintModule : IModule
 {
+    // ─── Real-decal path (cs2kz UTIL_DecalTrace + PlaceDecalEvent recolor) ───
+
+    private static delegate* unmanaged<void*, ulong*, float, void> _fnDecalTrace;
+    private static ulong _paintSymbol;
+    private bool _decalsAvailable;
+    private int  _pendingPaintSlot = -1;
+    private bool _pendingPaintPerf;
+
+    private void InitDecalPath()
+    {
+        try
+        {
+            _bridge.ModSharp.GetGameData().Register("kreedz-paint.games");
+            _fnDecalTrace = (delegate* unmanaged<void*, ulong*, float, void>) _bridge.ModSharp.GetGameData().GetAddress("DecalTrace");
+
+            var makeSymbol = (delegate* unmanaged<byte*, ulong>) _bridge.Modules.Tier0.FindFunction("_MakeGlobalSymbol");
+            if (makeSymbol != null)
+            {
+                var name = "paint\0"u8;
+                fixed (byte* p = name)
+                {
+                    _paintSymbol = makeSymbol(p);
+                }
+            }
+
+            _decalsAvailable = _fnDecalTrace != null && _paintSymbol != 0;
+        }
+        catch (Exception e)
+        {
+            _logger.LogWarning(e, "[KZ.Paint] decal natives unavailable — falling back to beam marks");
+            _decalsAvailable = false;
+        }
+
+        if (_decalsAvailable)
+        {
+            _bridge.ModSharp.HookNetMessage(ProtobufNetMessageType.GE_PlaceDecalEvent);
+            _bridge.HookManager.PostEventAbstract.InstallHookPre(OnPlaceDecal);
+            _logger.LogInformation("[KZ.Paint] real-decal path active (DecalTrace + _MakeGlobalSymbol resolved)");
+        }
+        else
+        {
+            _logger.LogWarning("[KZ.Paint] real-decal path unavailable — using beam X-marks");
+        }
+    }
+
+    // cs2kz OnPostEvent GE_PlaceDecalEvent: while our own DecalTrace call is on the stack, restyle
+    // the event (game expects ABGR; green = perf, red = non-perf). Foreign decals pass untouched.
+    private HookReturnValue<NetworkReceiver> OnPlaceDecal(IPostEventAbstractHookParams param, HookReturnValue<NetworkReceiver> ret)
+    {
+        if (param.MsgId != ProtobufNetMessageType.GE_PlaceDecalEvent || _pendingPaintSlot < 0)
+            return ret;
+
+        var abgr = _pendingPaintPerf
+            ? 0xFF00FF00u  // green
+            : 0xFF2828FFu; // red
+        param.Data.SetUInt32("color", abgr);
+
+        return ret;
+    }
+
+    private bool TryPlaceDecal(Sharp.Shared.GameEntities.IPlayerPawn pawn, Vector origin, bool perf, PlayerSlot slot)
+    {
+        // Ground trace under the takeoff spot — DecalTrace needs a real hit trace to project onto.
+        var col  = pawn.GetCollisionProperty();
+        var attr = RnQueryShapeAttr.PlayerMovement(col?.CollisionAttribute.InteractsWith ?? default);
+        attr.SetEntityToIgnore(pawn, 0);
+
+        var start = new Vector(origin.X, origin.Y, origin.Z + 4f);
+        var end   = new Vector(origin.X, origin.Y, origin.Z - 24f);
+        var line  = new TraceShapeRay(new TraceShapeLine());
+        var tr    = _bridge.PhysicsQueryManager.TraceShape(line, start, end, attr);
+
+        if (!tr.DidHit())
+            return false;
+
+        // The managed GameTrace mirrors the native CGameTrace layout (sizeof == 192 per the ModSharp
+        // engine header); copy it into a zeroed native-sized buffer for the engine call.
+        var buf = stackalloc byte[192];
+        Unsafe.InitBlock(buf, 0, 192);
+        Unsafe.CopyBlock(buf, &tr, 185);
+
+        var symbol = _paintSymbol;
+        _pendingPaintSlot = slot.AsPrimitive();
+        _pendingPaintPerf = perf;
+        try
+        {
+            _fnDecalTrace(buf, &symbol, 0f);
+        }
+        finally
+        {
+            _pendingPaintSlot = -1;
+        }
+
+        return true;
+    }
+
     private const int   MarkCount = 48; // marks per player; 2 beams each
     private const float MarkSize  = 6f;
     private const int   PerfTicks = 2;  // ground ticks <= this at takeoff = perf (jumpstats convention)
@@ -58,11 +158,16 @@ internal sealed class PaintModule : IModule
 
         _bridge.HookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
         _prefs.Loaded += slot => _enabled[slot] = _prefs.Get(slot, "paint") == "1";
+        InitDecalPath();
         return true;
     }
 
     public void Shutdown()
-        => _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+    {
+        _bridge.HookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        if (_decalsAvailable)
+            _bridge.HookManager.PostEventAbstract.RemoveHookPre(OnPlaceDecal);
+    }
 
     private void OnProcessMovePre(Sharp.Shared.HookParams.IPlayerProcessMoveForwardParams arg)
     {
@@ -74,7 +179,11 @@ internal sealed class PaintModule : IModule
         var onGround = arg.Pawn.GroundEntityHandle.IsValid();
 
         if (_enabled[slot] && !onGround && _wasGround[slot] && arg.Pawn.ActualMoveType == MoveType.Walk)
-            PlaceMark(slot, arg.Pawn.GetAbsOrigin(), perf: _groundTicks[slot] <= PerfTicks);
+        {
+            var perf = _groundTicks[slot] <= PerfTicks;
+            if (!_decalsAvailable || !TryPlaceDecal(arg.Pawn, arg.Pawn.GetAbsOrigin(), perf, slot))
+                PlaceMark(slot, arg.Pawn.GetAbsOrigin(), perf);
+        }
 
         _groundTicks[slot] = onGround ? _groundTicks[slot] + 1 : 0;
         _wasGround[slot]   = onGround;

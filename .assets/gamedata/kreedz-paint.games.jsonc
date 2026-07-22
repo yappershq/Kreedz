@@ -1,0 +1,15 @@
+{
+    // UTIL_DecalTrace(trace_t*, CGlobalSymbol*, float sizeOverride) — sigs lifted from cs2kz-metamod
+    // gamedata (cs2kz-core.games.txt "DecalTrace"). Emits a world decal at a trace hit; the resulting
+    // GE_PlaceDecalEvent is restyled in PaintModule's PostEventAbstract hook.
+    "Addresses": {
+        "DecalTrace": {
+            "library": "server",
+            "windows": "48 83 EC ? F3 0F 10 81 ? ? ? ? 0F 2E 05",
+            "linux": "F3 0F 10 05 ? ? ? ? 0F 2E 87 ? ? ? ? 7A ? 74 ? 48 8B 47",
+            "refs": {
+                "strings": []
+            }
+        }
+    }
+}
