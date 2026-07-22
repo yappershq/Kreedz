@@ -4,9 +4,11 @@
  * hooking pawns directly is rejected) and the per-viewer state cleared, plus their carried weapons'
  * world models. Preference-persisted ("hide"), reapplied on spawn (new pawns/weapons) and pref load.
  *
- * Not ported from cs2kz quiet (needs a PostEvent net-message hook ModSharp doesn't expose): hiding
- * hidden players' shot/reload/footstep SOUNDS and bullet decals, and the custom-particle filtering.
- * Hidden players are silent-model only in cs2kz; here they're invisible but still audible.
+ * Sound/decal suppression (cs2kz OnPostEvent) rides ModSharp's PostEventAbstract hook: FireBullets
+ * (shot sound + bullet decals), WeaponSound (reloads etc.) and SosStartSoundEvent (misc player sounds)
+ * from a hidden player are stripped from every hiding viewer's receiver mask — hidden players are
+ * both invisible AND inaudible, like cs2kz. Remaining deviation: custom-particle filtering (we have
+ * no custom particle systems to filter).
  */
 
 using System;
@@ -47,13 +49,53 @@ internal sealed class HideModule : IModule
 
         _bridge.HookManager.PlayerSpawnPost.InstallForward(OnPlayerSpawnPost);
         _prefs.Loaded += OnPreferencesLoaded;
+
+        // cs2kz OnPostEvent — suppress hidden players' sounds/decals for hiding viewers.
+        _bridge.ModSharp.HookNetMessage(ProtobufNetMessageType.GE_FireBulletsId);
+        _bridge.ModSharp.HookNetMessage(ProtobufNetMessageType.CS_UM_WeaponSound);
+        _bridge.ModSharp.HookNetMessage(ProtobufNetMessageType.GE_SosStartSoundEvent);
+        _bridge.HookManager.PostEventAbstract.InstallHookPre(OnPostEvent);
         return true;
     }
 
     public void Shutdown()
     {
         _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
+        _bridge.HookManager.PostEventAbstract.RemoveHookPre(OnPostEvent);
         _prefs.Loaded -= OnPreferencesLoaded;
+    }
+
+    private HookReturnValue<NetworkReceiver> OnPostEvent(IPostEventAbstractHookParams param, HookReturnValue<NetworkReceiver> ret)
+    {
+        var emitterEntIndex = param.MsgId switch
+        {
+            ProtobufNetMessageType.GE_FireBulletsId      => (int) ((param.Data.ReadUInt32("player") ?? 0) & 0x3FFF),
+            ProtobufNetMessageType.CS_UM_WeaponSound     => param.Data.ReadInt32("entidx") ?? 0,
+            ProtobufNetMessageType.GE_SosStartSoundEvent => param.Data.ReadInt32("source_entity_index") ?? 0,
+            _                                            => 0,
+        };
+
+        if (emitterEntIndex <= 0)
+            return ret;
+
+        if (_bridge.EntityManager.FindEntityByIndex(new EntityIndex(emitterEntIndex)) is not { IsPlayerPawn: true } emitterEnt
+            || emitterEnt.AsPlayerPawn() is not { } emitterPawn
+            || emitterPawn.GetController() is not { IsValidEntity: true } emitterController)
+            return ret;
+
+        var emitterSlot = emitterController.PlayerSlot.AsPrimitive();
+        var bits        = param.Receivers.AsPrimitive();
+        var modified    = bits;
+
+        for (var v = 0; v < PlayerSlot.MaxPlayerCount.AsPrimitive(); v++)
+        {
+            if (_hidden[v] && v != emitterSlot)
+                modified &= ~(1UL << v);
+        }
+
+        return modified != bits
+            ? new HookReturnValue<NetworkReceiver>(EHookAction.SkipCallReturnOverride, new NetworkReceiver(modified))
+            : ret;
     }
 
     private void Toggle(PlayerSlot slot)
