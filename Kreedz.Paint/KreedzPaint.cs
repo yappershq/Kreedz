@@ -86,7 +86,7 @@ public sealed unsafe class KreedzPaint : IModSharpModule
         var mgr = _shared.GetSharpModuleManager();
 
         _localizer = mgr.GetOptionalSharpModuleInterface<ILocalizerManager>(ILocalizerManager.Identity)?.Instance;
-        _localizer?.LoadLocaleFile("kreedz-paint.json");
+        _localizer?.LoadLocaleFile("kreedz-paint");
 
         _prefs = mgr.GetOptionalSharpModuleInterface<IKzPreferences>(IKzPreferences.Identity)?.Instance;
         if (_prefs is { } prefs)

@@ -50,7 +50,7 @@ public sealed class KreedzRankTitles : IModSharpModule
         var mgr = _shared.GetSharpModuleManager();
 
         _localizer = mgr.GetOptionalSharpModuleInterface<ILocalizerManager>(ILocalizerManager.Identity)?.Instance;
-        _localizer?.LoadLocaleFile("kreedz-ranktitles.json");
+        _localizer?.LoadLocaleFile("kreedz-ranktitles");
 
         _request = mgr.GetOptionalSharpModuleInterface<IRequestManager>(IRequestManager.Identity)?.Instance;
 
