@@ -48,6 +48,9 @@ internal static class ModuleDI
         // KZ port: jumpstats option toggles (cs2kz optionService keys jsFailstats/jsAlways).
         services.AddSingleton<IModule, OptionsModule>();
 
+        // KZ port: !zt (cs2kz ztopwatch) — personal practice stopwatch between two user-placed zones.
+        services.AddSingleton<IModule, ZtopwatchModule>();
+
         services.ImplSingleton<ITimerModule, IModule, TimerModule>();
         services.ImplSingleton<IStyleModule, IModule, StyleModule>();
         services.ImplSingleton<IRecordModule, IModule, RecordModule>();

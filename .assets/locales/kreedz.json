@@ -181,6 +181,18 @@
     "de-DE": " {{green}}[KZ]{{default}} {{red}}Du kannst kein Checkpoint in der Luft machen.",
     "ko-KR": " {{green}}[KZ]{{default}} {{red}}공중에서는 체크포인트를 만들 수 없습니다."
   },
+  "Kreedz_Zt_Usage": {
+    "en-US": " {{green}}[KZ]{{default}} Zone stopwatch: {{lime}}!zt s1/s2{{default}} start corners · {{lime}}!zt e1/e2{{default}} end corners · {{lime}}!zt jump/land/reset{{default}}."
+  },
+  "Kreedz_Zt_Point": {
+    "en-US": " {{green}}[KZ]{{default}} Stopwatch corner {{lime}}{0}{{default}} set."
+  },
+  "Kreedz_Zt_Time": {
+    "en-US": " {{green}}[KZ]{{default}} Stopwatch: {{gold}}{0}{{default}}."
+  },
+  "Kreedz_Zt_Reset": {
+    "en-US": " {{green}}[KZ]{{default}} Zone stopwatch reset."
+  },
   "Kreedz_Opt_On": {
     "en-US": " {{green}}[KZ]{{default}} Option {{lime}}{0}{{default}} enabled."
   },
