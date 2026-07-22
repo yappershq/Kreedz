@@ -415,5 +415,8 @@
   },
   "Kreedz_Tip_5": {
     "en-US": " {{green}}[Tip]{{default}} {{lime}}!undo{{default}} removes your last checkpoint; {{lime}}!prevcp{{default}} / {{lime}}!nextcp{{default}} cycle through them."
+  },
+  "Kreedz_Goto_Running": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Can't use !goto while the timer is running."
   }
 }

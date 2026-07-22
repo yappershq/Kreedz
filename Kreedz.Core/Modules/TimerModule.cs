@@ -90,6 +90,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
     private readonly IConVar sv_standable_normal;
 
     private readonly IMapApiSource _mapApi;
+    private readonly ICheckpointModule _checkpoint;
 
     public TimerModule(InterfaceBridge      bridge,
                        IPlayerManager       playerManager,
@@ -99,6 +100,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
                        IEventHookManager    eventHook,
                        ICommandManager      commandManager,
                        IMapApiSource        mapApiSource,
+                       ICheckpointModule    checkpointModule,
                        ILogger<TimerModule> logger)
     {
         _bridge         = bridge;
@@ -108,6 +110,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
         _styleModule    = styleModule;
         _eventHook      = eventHook;
         _mapApi         = mapApiSource;
+        _checkpoint     = checkpointModule;
         _commandManager = commandManager;
 
         _logger      = logger;
@@ -216,6 +219,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
             case EZoneType.Start:
             {
                 timerInfo.StopTimer();
+                _checkpoint.ResetCheckpoints(controller.PlayerSlot); // cs2kz: start zone wipes cps + tpCount
 
                 // Clamp speed on entering start zone: kill momentum from flying in, don't preserve Z velocity
                 var enterLimit = _mapInfoModule.GetEnterSpeedLimit(info.Track);
@@ -867,6 +871,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
         _stageTimerInfo[slot] = null;
         _authenticated[slot]  = false;
         _pauseState[slot]     = null;
+        _checkpoint.ResetCheckpoints(slot); // slot-reuse: never inherit the previous player's checkpoints
     }
 
     public void OnClientInfoLoaded(SteamID steamId)

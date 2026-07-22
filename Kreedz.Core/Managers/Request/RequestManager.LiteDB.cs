@@ -324,6 +324,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                           .GroupBy(run => new
                           {
                               run.SteamId,
+                              run.Mode,
                               run.Style,
                               run.Track,
                           })
@@ -359,6 +360,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                           .GroupBy(run => new
                           {
                               run.SteamId,
+                              run.Mode,
                               run.Style,
                               run.Track,
                               run.Stage,
@@ -396,7 +398,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                           .Where(i => i.MapId == mapId.Value && i.Style == style && i.Track == track && i.Stage == 0)
                           .ToEnumerable()
                           .Where(run => !banned.Contains(run.SteamId))
-                          .GroupBy(run => run.SteamId)
+                          .GroupBy(run => new { run.SteamId, run.Mode })
                           .Select(group => group.OrderBy(run => run.Time)
                                                 .ThenBy(run => run.Id)
                                                 .First())
@@ -433,7 +435,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
                                       && i.Track == track)
                           .ToEnumerable()
                           .Where(run => !banned.Contains(run.SteamId))
-                          .GroupBy(run => run.SteamId)
+                          .GroupBy(run => new { run.SteamId, run.Mode })
                           .Select(group => group.OrderBy(run => run.Time)
                                                 .ThenBy(run => run.Id)
                                                 .First())
@@ -594,6 +596,7 @@ internal class RequestManagerLiteDB : IManager, IRequestManager, IDisposable
         List<RunRecord> records = allPlayerRuns
                                   .GroupBy(run => new
                                   {
+                                      run.Mode,
                                       run.Style,
                                       run.Track,
                                   })

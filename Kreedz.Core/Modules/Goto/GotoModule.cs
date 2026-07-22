@@ -13,6 +13,7 @@ using Sharp.Shared.Enums;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 using Kreedz.Shared.Interfaces;
+using Kreedz.Shared.Models.Timer;
 
 namespace Kreedz.Modules;
 
@@ -22,12 +23,14 @@ internal sealed class GotoModule : IModule, IGotoModule
 {
     private readonly InterfaceBridge     _bridge;
     private readonly ICommandManager     _commandManager;
+    private readonly ITimerModule    _timer;
     private readonly ILogger<GotoModule> _logger;
 
-    public GotoModule(InterfaceBridge bridge, ICommandManager commandManager, ILogger<GotoModule> logger)
+    public GotoModule(InterfaceBridge bridge, ICommandManager commandManager, ITimerModule timerModule, ILogger<GotoModule> logger)
     {
         _bridge         = bridge;
         _commandManager = commandManager;
+        _timer          = timerModule;
         _logger         = logger;
     }
 
@@ -47,6 +50,13 @@ internal sealed class GotoModule : IModule, IGotoModule
 
         if (Self(slot) is not { } self)
             return ECommandAction.Handled;
+
+        // cs2kz kz_goto: refuse !goto while the timer is running (it's a free mid-run teleport).
+        if (_timer.GetTimerInfo(slot)?.Status == ETimerStatus.Running)
+        {
+            Msg(slot, "Kreedz_Goto_Running");
+            return ECommandAction.Handled;
+        }
 
         var query = command.GetArg(1);
         if (Resolve(query, slot) is not { } targetPawn)
