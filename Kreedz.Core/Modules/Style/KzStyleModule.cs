@@ -128,12 +128,33 @@ internal sealed class KzStyleModule : IModule, IKzStyleModule, IKzStyleRegistry
         SetStyle(slot, id, !_active[slot].Contains(id));
     }
 
+    // cs2kz-style incompatibility (kz_style_manager incompatibleStyles): input styles that would combine
+    // into a broken control scheme can't be active together. ad+ws would zero both movement axes → frozen.
+    private static readonly Dictionary<string, string[]> Incompatible = new()
+    {
+        ["ad"] = ["ws"],
+        ["ws"] = ["ad"],
+    };
+
     private void SetStyle(PlayerSlot slot, string? id, bool enable)
     {
         if (id is null || !_styles.TryGetValue(id, out var style))
         {
             Msg(slot, "Kreedz_Style_Unknown", id);
             return;
+        }
+
+        if (enable && Incompatible.TryGetValue(id, out var conflicts))
+        {
+            foreach (var other in conflicts)
+            {
+                if (_active[slot].Contains(other))
+                {
+                    Msg(slot, "Kreedz_Style_Incompatible", style.Name,
+                        _styles.TryGetValue(other, out var os) ? os.Name : other);
+                    return; // refuse — leave the run + existing styles untouched
+                }
+            }
         }
 
         if (enable) _active[slot].Add(id);

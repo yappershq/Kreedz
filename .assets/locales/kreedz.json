@@ -424,5 +424,8 @@
   },
   "Kreedz_Cant_Finish_Cp": {
     "en-US": " {{green}}[KZ]{{default}} {{red}}Can't finish — you missed a checkpoint."
+  },
+  "Kreedz_Style_Incompatible": {
+    "en-US": " {{green}}[KZ]{{default}} {{red}}Style {{lime}}{0}{{default}} {{red}}can't combine with {{lime}}{1}{{red}}."
   }
 }

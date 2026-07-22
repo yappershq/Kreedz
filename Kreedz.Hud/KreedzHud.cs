@@ -118,10 +118,17 @@ public sealed class KreedzHud : IModSharpModule
         _hudEvent.FireToClient(client);
     }
 
+    // h:mm:ss.mmm — show the hours field only past the hour mark (cs2kz HUD formatting).
     private static string FormatTime(float seconds)
     {
-        var totalMs = (int) MathF.Round(seconds * 1000f);
-        return $"{totalMs / 60000:00}:{totalMs / 1000 % 60:00}.{totalMs % 1000:000}";
+        var totalMs  = (int) MathF.Round(seconds * 1000f);
+        var hours    = totalMs / 3600000;
+        var minutes  = totalMs / 60000 % 60;
+        var secs     = totalMs / 1000 % 60;
+        var ms       = totalMs % 1000;
+        return hours > 0
+            ? $"{hours}:{minutes:00}:{secs:00}.{ms:000}"
+            : $"{minutes:00}:{secs:00}.{ms:000}";
     }
 
     private static string Keys(UserCommandButtons b)
