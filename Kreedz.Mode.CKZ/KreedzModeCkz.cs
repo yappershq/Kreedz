@@ -21,6 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
 using Sharp.Shared.Enums;
+using Sharp.Shared.GameEntities;
 using Sharp.Shared.GameObjects;
 using Sharp.Shared.HookParams;
 using Sharp.Shared.Managers;
@@ -134,6 +135,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     public bool Init()
     {
         _hookManager.PlayerProcessMovePre.InstallForward(OnProcessMovePre);
+        _hookManager.PlayerProcessMovePost.InstallForward(OnProcessMovePost); // forced-subtick +0.5 injection
         _hookManager.PlayerGetMaxSpeed.InstallHookPre(OnGetMaxSpeed);
         _hookManager.PlayerRunCommand.InstallHookPre(OnRunCommandPre); // half-tick input quantization
         _tpmEnabled = _tpm?.GetBool() == true;
@@ -159,6 +161,7 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
     public void Shutdown()
     {
         _hookManager.PlayerProcessMovePre.RemoveForward(OnProcessMovePre);
+        _hookManager.PlayerProcessMovePost.RemoveForward(OnProcessMovePost);
         _hookManager.PlayerGetMaxSpeed.RemoveHookPre(OnGetMaxSpeed);
         _hookManager.PlayerRunCommand.RemoveHookPre(OnRunCommandPre);
     }
@@ -179,6 +182,11 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
             _wasGround[slot] = arg.Pawn.GroundEntityHandle.IsValid();
             return;
         }
+
+        // cs2kz OnPhysicsSimulate: force a subtick boundary at the half-tick just before this one so the
+        // engine evaluates movement on the half-tick grid. Must run in the movement hook (not usercmd) — the
+        // forced array is only live for the current tick during physics sim.
+        InjectForcedSubtick(arg.Pawn, post: false);
 
         var globals   = _modSharp.GetGlobals();
         var frametime = globals.FrameTime;
@@ -218,6 +226,52 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
         _wasGround[slot] = onGround;
     }
 
+    // cs2kz OnPhysicsSimulatePost — seed the half-tick boundaries AHEAD of this tick (tickCount+0.5, +1.5, …)
+    // into any free slots, so the forced-subtick grid stays continuous across ticks.
+    private void OnProcessMovePost(IPlayerProcessMoveForwardParams arg)
+    {
+        var client = arg.Client;
+        if (!client.IsValid || client.IsFakeClient || !IsCkz(client.Slot) || !arg.Pawn.IsAlive)
+            return;
+
+        InjectForcedSubtick(arg.Pawn, post: true);
+    }
+
+    // cs2kz SetForcedSubtickMove into m_arrForceSubtickMoveWhen[4] (reached via schema net-var, extraOffset
+    // = elem*4B — the typed property isn't on the NuGet interface). pre = the (tick-0.5) single injection
+    // that runs before movement; post = the forward (tick+0.5, +1.5, …) fill that runs after.
+    // ponytail: SetNetVar always replicates the float; cs2kz suppresses the network flag on the pre write.
+    // Server-side sim value consumed same tick, so it's cosmetic-only — not worth a raw-memory write to match.
+    private void InjectForcedSubtick(IPlayerPawn pawn, bool post)
+    {
+        if (_forcedSubtick?.GetBool() != true || pawn.GetMovementService() is not { } fms)
+            return;
+
+        var tickCount   = _modSharp.GetGlobals().TickCount;
+        var subtickTime = (tickCount + (post ? 0.5f : -0.5f)) * TickInterval;
+
+        for (ushort i = 0; i < 4; i++)
+        {
+            var existing = fms.GetNetVar<float>("m_arrForceSubtickMoveWhen", (ushort) (i * 4));
+
+            if (MathF.Abs(subtickTime - existing) < 0.001f)
+            {
+                if (!post)
+                    return;                 // pre: boundary already present → done
+                subtickTime += TickInterval; // post: bump to the next half-tick and keep filling
+                continue;
+            }
+
+            if (subtickTime > existing)
+            {
+                fms.SetNetVar("m_arrForceSubtickMoveWhen", subtickTime, false, (ushort) (i * 4));
+                if (!post)
+                    return;                 // pre: single injection
+                subtickTime += TickInterval; // post: advance to seed the next slot
+            }
+        }
+    }
+
     // cs2kz KZClassicModeService::OnSetupMove — quantize CKZ players' subtick inputs to {0, 0.5} tick
     // boundaries and re-arm the legacy jump latch when a jump press lands >0.5 tick after the last release.
     // Attack/attack2/reload subtick steps are left untouched (cs2kz skips them). Runs pre-command so the
@@ -231,24 +285,6 @@ public sealed unsafe class KreedzModeCkz : IModSharpModule, IKzMovementMode
         var tickCount = _modSharp.GetGlobals().TickCount;
         var moves     = param.SubtickMoveSize;
 
-        // cs2kz OnPhysicsSimulate forced-subtick injection: put a subtick-move boundary at the half-tick
-        // just before this tick so the engine evaluates movement on the half-tick grid, not only at input
-        // times. m_arrForceSubtickMoveWhen[4] reached via the schema net-var API (extraOffset = elem*4B).
-        if (_forcedSubtick?.GetBool() == true && param.Pawn.GetMovementService() is { } fms)
-        {
-            var subtickTime = (tickCount - 0.5f) * TickInterval;
-            for (ushort i = 0; i < 4; i++)
-            {
-                var existing = fms.GetNetVar<float>("m_arrForceSubtickMoveWhen", (ushort) (i * 4));
-                if (MathF.Abs(subtickTime - existing) < 0.001f)
-                    break; // already a boundary at this time
-                if (subtickTime > existing)
-                {
-                    fms.SetNetVar("m_arrForceSubtickMoveWhen", subtickTime, false, (ushort) (i * 4));
-                    break;
-                }
-            }
-        }
         for (var i = 0; i < moves; i++)
         {
             var step = param.GetSubtickMove(i);
