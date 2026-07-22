@@ -1,9 +1,13 @@
 /*
- * Mapping-API anti-bhop + modifier trigger runtime (cs2kz src/kz/trigger — TouchAntibhopTrigger,
- * TouchModifierTrigger, UpdateModifiersInternal).
+ * Mapping-API anti-bhop + modifier + teleport/bhop trigger runtime (cs2kz src/kz/trigger —
+ * UpdateTriggerTouchList, TouchAntibhopTrigger, TouchModifierTrigger, TouchTeleportTrigger,
+ * UpdateModifiersInternal).
  *
- * ZoneModule feeds Enter/Exit from the trigger_multiple touch outputs; this module keeps the per-player
- * touching sets and applies the effects per tick:
+ * TriggerFix: the touch source is NOT the engine's touch outputs — every tick each player's live
+ * collision hull is overlap-traced against trigger shapes (raw TraceShape with HitTrigger + a
+ * collect-and-refuse filter, cs2kz CTraceFilterHitAllTriggers), and the diff against the tracked set
+ * synthesizes enter/exit. Engine touches can be dodged with subtick movement; this can't. The per-player
+ * touching sets then drive the per-tick effects:
  *   - Anti-bhop: while active (time==0, or on-ground shorter than the trigger's grace time, or airborne
  *     for prediction), jumping is blocked by stripping IN_JUMP from the usercmd (buttons + subtick jump
  *     presses) and holding OldJumpPressed — the managed equivalent of cs2kz's per-slot
@@ -21,6 +25,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared.Enums;
 using Sharp.Shared.HookParams;
@@ -32,15 +37,6 @@ namespace Kreedz.Modules;
 
 internal interface ITriggerModifiers
 {
-    void EnterAntiBhop(PlayerSlot slot, uint triggerHandle, float time);
-
-    void EnterModifier(PlayerSlot slot, uint triggerHandle, in KzMapModifier modifier);
-
-    /// <summary>Player entered a teleport-family trigger (Teleport / Multi/Single/Sequential bhop).</summary>
-    void EnterTeleport(PlayerSlot slot, uint triggerHandle, in KzMapTeleportData data, Vector triggerOrigin);
-
-    void Exit(PlayerSlot slot, uint triggerHandle);
-
     /// <summary>timer_modifier_disable_checkpoints — player is in an anti-cp area.</summary>
     bool CheckpointsDisabled(PlayerSlot slot);
 
@@ -112,20 +108,127 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         _bridge.HookManager.PlayerSpawnPost.RemoveForward(OnPlayerSpawnPost);
     }
 
-    public void EnterAntiBhop(PlayerSlot slot, uint triggerHandle, float time)
-        => _antibhops[slot][triggerHandle] = time;
-
-    public void EnterModifier(PlayerSlot slot, uint triggerHandle, in KzMapModifier modifier)
-        => _modifiers[slot][triggerHandle] = modifier;
-
-    public void EnterTeleport(PlayerSlot slot, uint triggerHandle, in KzMapTeleportData data, Vector triggerOrigin)
-        => _teleports[slot][triggerHandle] = new TeleportState(data, _bridge.GlobalVars.CurTime, triggerOrigin);
-
-    public void Exit(PlayerSlot slot, uint triggerHandle)
+    private void Exit(PlayerSlot slot, uint triggerHandle)
     {
         _antibhops[slot].Remove(triggerHandle);
         _modifiers[slot].Remove(triggerHandle);
         _teleports[slot].Remove(triggerHandle);
+        _pushTouched[slot].Remove(triggerHandle);
+    }
+
+    // ─── TriggerFix: per-tick hull-overlap trigger detection (cs2kz UpdateTriggerTouchList) ───
+
+    private readonly HashSet<uint>[] _pushTouched = NewSets();
+    private readonly HashSet<uint>   _present     = new();  // scratch — hooks are main-thread
+    private readonly List<uint>      _exitScratch = new();
+
+    private static HashSet<uint>[] NewSets()
+    {
+        var a = new HashSet<uint>[PlayerSlot.MaxPlayerCount];
+        for (var i = 0; i < a.Length; i++) a[i] = new HashSet<uint>();
+        return a;
+    }
+
+    private static readonly List<nint> HitTriggers = new(16);
+
+    [UnmanagedCallersOnly]
+    private static bool CollectTriggerFilter(CTraceFilter* filter, nint entityPtr)
+    {
+        HitTriggers.Add(entityPtr);
+        return false; // never actually hit — collect every consulted trigger (cs2kz CTraceFilterHitAllTriggers)
+    }
+
+    private void UpdateTouchList(PlayerSlot slot, Sharp.Shared.GameEntities.IPlayerPawn pawn)
+    {
+        // cs2kz EndTouchAll — noclip drops every touch.
+        if (pawn.ActualMoveType == MoveType.NoClip)
+        {
+            if (_antibhops[slot].Count + _modifiers[slot].Count + _teleports[slot].Count + _pushTouched[slot].Count > 0)
+            {
+                _antibhops[slot].Clear();
+                _modifiers[slot].Clear();
+                _teleports[slot].Clear();
+                _pushTouched[slot].Clear();
+            }
+
+            return;
+        }
+
+        HitTriggers.Clear();
+
+        var attr = new RnQueryShapeAttr
+        {
+            m_nInteractsWith  = InteractionLayers.Trigger,
+            m_nObjectSetMask  = RnQueryObjectSet.All,
+            m_nCollisionGroup = CollisionGroupType.Debris, // cs2kz CTraceFilterHitAllTriggers
+            HitSolid          = true,
+            HitTrigger        = true,
+            Unknown           = true,
+        };
+
+        var col  = pawn.GetCollisionProperty();
+        var hull = new TraceShapeHull
+        {
+            Mins = col?.Mins ?? new Vector(-16f, -16f, 0f),
+            Maxs = col?.Maxs ?? new Vector(16f, 16f, 72f),
+        };
+
+        var origin = pawn.GetAbsOrigin();
+        _bridge.PhysicsQueryManager.TraceShape(new TraceShapeRay(hull), origin, origin, attr,
+            (nint) (delegate* unmanaged<CTraceFilter*, nint, bool>) &CollectTriggerFilter);
+
+        // Resolve overlapped triggers → the mapping-API family; enter the new ones.
+        // ponytail: resolves per tick (MakeEntity + origin lookup per overlapped trigger) — cache
+        // handle→kind per map if a profile ever shows this; usually 0-3 triggers per player.
+        _present.Clear();
+        foreach (var ptr in HitTriggers)
+        {
+            if (_bridge.EntityManager.MakeEntityFromPointer<Sharp.Shared.GameEntities.IBaseEntity>(ptr)
+                is not { IsValidEntity: true } trigger)
+                continue;
+
+            var handle = trigger.Handle.GetValue();
+
+            if (_antibhops[slot].ContainsKey(handle) || _modifiers[slot].ContainsKey(handle)
+                || _teleports[slot].ContainsKey(handle) || _pushTouched[slot].Contains(handle))
+            {
+                _present.Add(handle);
+                continue;
+            }
+
+            var triggerOrigin = trigger.GetAbsOrigin();
+            if (_mapApi.TryResolveTeleport(triggerOrigin, out var teleport))
+                _teleports[slot][handle] = new TeleportState(teleport, _bridge.GlobalVars.CurTime, triggerOrigin);
+            else if (_mapApi.TryResolveAntiBhop(triggerOrigin, out var abTime))
+                _antibhops[slot][handle] = abTime;
+            else if (_mapApi.TryResolveModifier(triggerOrigin, out var modifier))
+                _modifiers[slot][handle] = modifier;
+            else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
+            {
+                pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse); // impulse once per entry
+                _pushTouched[slot].Add(handle);
+            }
+            else
+            {
+                continue; // not a mapping-API trigger
+            }
+
+            _present.Add(handle);
+        }
+
+        // Exit everything tracked that the hull no longer overlaps.
+        _exitScratch.Clear();
+        foreach (var h in _antibhops[slot].Keys)
+            if (!_present.Contains(h)) _exitScratch.Add(h);
+        foreach (var h in _modifiers[slot].Keys)
+            if (!_present.Contains(h)) _exitScratch.Add(h);
+        foreach (var h in _teleports[slot].Keys)
+            if (!_present.Contains(h)) _exitScratch.Add(h);
+        foreach (var h in _pushTouched[slot])
+            if (!_present.Contains(h)) _exitScratch.Add(h);
+
+        foreach (var h in _exitScratch)
+            Exit(slot, h);
     }
 
     public bool CheckpointsDisabled(PlayerSlot slot) => AnyModifier(slot, static m => m.DisableCheckpoints);
@@ -166,7 +269,10 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         if (!client.IsValid || client.IsFakeClient || !arg.Pawn.IsAlive)
             return;
 
-        var slot     = client.Slot;
+        var slot = client.Slot;
+
+        UpdateTouchList(slot, arg.Pawn); // TriggerFix — refresh the touching sets from a live hull overlap
+
         var onGround = arg.Pawn.GroundEntityHandle.IsValid();
         var tookOff  = !onGround && _wasGround[slot];
 
@@ -358,6 +464,7 @@ internal sealed unsafe class TriggerModifierModule : IModule, ITriggerModifiers
         _antibhops[slot].Clear();
         _modifiers[slot].Clear();
         _teleports[slot].Clear();
+        _pushTouched[slot].Clear();
         _seqBhops[slot].Clear();
         _lastSingleBhop[slot] = 0;
         _gravityApplied[slot] = false;

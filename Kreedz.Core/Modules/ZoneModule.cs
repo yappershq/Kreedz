@@ -72,7 +72,6 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
     private readonly ICommandManager      _commandManager;
     private readonly IRequestManager      _requestManager;
     private readonly IMapApiSource        _mapApi;
-    private readonly ITriggerModifiers    _triggerMods;
 
     private readonly ILogger<ZoneModule> _logger;
     private readonly ListenerHub<IZoneModuleListener> _listenerHub;
@@ -96,7 +95,6 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
                       ICommandManager     commandManager,
                       IRequestManager     requestManager,
                       IMapApiSource       mapApiSource,
-                      ITriggerModifiers   triggerModifiers,
                       ILogger<ZoneModule> logger)
     {
         _bridge         = bridge;
@@ -105,7 +103,6 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
         _commandManager = commandManager;
         _requestManager = requestManager;
         _mapApi         = mapApiSource;
-        _triggerMods    = triggerModifiers;
         _buildZoneInfo  = new BuildZoneInfo?[PlayerSlot.MaxPlayerCount];
 
         for (var t = 0; t < TimerConstants.MAX_TRACK; t++)
@@ -225,25 +222,9 @@ internal partial class ZoneModule : IModule, IZoneModule, IEntityListener, IGame
 
         if (!_zones.TryGetValue(entityHandle, out var info))
         {
-            // Not a timer zone — it may be a mapping-API teleport/push (apply on enter) or an
-            // anti-bhop/modifier zone (tracked while inside via TriggerModifierModule).
-            var triggerOrigin = entity.GetAbsOrigin();
-            if (output == "onstarttouch")
-            {
-                if (_mapApi.TryResolveTeleport(triggerOrigin, out var teleport))
-                    _triggerMods.EnterTeleport(controller.PlayerSlot, entityHandle, teleport, triggerOrigin);
-                else if (_mapApi.TryResolvePush(triggerOrigin, out var impulse))
-                    pawn.SetAbsVelocity(pawn.GetAbsVelocity() + impulse);
-                else if (_mapApi.TryResolveAntiBhop(triggerOrigin, out var abTime))
-                    _triggerMods.EnterAntiBhop(controller.PlayerSlot, entityHandle, abTime);
-                else if (_mapApi.TryResolveModifier(triggerOrigin, out var modifier))
-                    _triggerMods.EnterModifier(controller.PlayerSlot, entityHandle, modifier);
-            }
-            else if (output == "onendtouch")
-            {
-                _triggerMods.Exit(controller.PlayerSlot, entityHandle);
-            }
-
+            // Not a timer zone. Mapping-API teleport/push/anti-bhop/modifier triggers are handled by
+            // TriggerModifierModule's per-tick hull-overlap scan (TriggerFix) — engine touch outputs
+            // are deliberately not used for them (dodgeable with subtick movement).
             return EHookAction.Ignored;
         }
 
