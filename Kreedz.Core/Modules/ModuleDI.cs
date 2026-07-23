@@ -98,6 +98,9 @@ internal static class ModuleDI
         // KZ port: KZ run semantics (Pro/Standard from teleport count) on the timer (cs2kz src/kz/timer).
         services.ImplSingleton<IKzTimerModule, IModule, KzTimerModule>();
 
+        // Race control (IKzRaceControl) for a 3rd-party event gate — Core stays event-agnostic.
+        services.ImplSingleton<IKzRaceModule, IModule, KzRaceModule>();
+
         // KZ port: anticheat now ships as the external Kreedz.Anticheat plugin (ISharedSystem-only, no Core deps).
 
         // KZ port: rotating tips (cs2kz src/kz/tip).

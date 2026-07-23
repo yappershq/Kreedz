@@ -48,6 +48,10 @@ internal interface ITimerModule
 
     void StopTimer(PlayerSlot slot);
 
+    /// <summary>Reset a player's run: stop timer, change to <paramref name="track"/>, teleport to its Start
+    /// zone (the `!r` behaviour). Used by the race control to arm the field.</summary>
+    void Restart(PlayerSlot slot, int track = -1);
+
     bool PauseTimer(PlayerSlot slot);
 
     bool ResumeTimer(PlayerSlot slot);
@@ -571,7 +575,7 @@ internal partial class TimerModule : ITimerModule, IModule, IZoneModuleListener,
     public void UnregisterListener(ITimerModuleListener listener)
         => _listenerHub.Unregister(listener);
 
-    private void Restart(PlayerSlot slot, int track = -1)
+    public void Restart(PlayerSlot slot, int track = -1)
     {
         if (_bridge.ClientManager.GetGameClient(slot) is not { } client)
         {

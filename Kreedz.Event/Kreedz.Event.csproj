@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>14</LangVersion>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <PlatformTarget>x64</PlatformTarget>
+        <AssemblyTitle>Kreedz.Event</AssemblyTitle>
+        <RootNamespace>Kreedz.Event</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Kreedz.Shared\Kreedz.Shared.csproj" Private="false" ExcludeAssets="runtime" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="ModSharp.Sharp.Shared" Version="*" />
+        <!-- Foreign shared contract: compile-only; the EventManager plugin ships the runtime copy to shared/. -->
+        <PackageReference Include="YappersHQ.EventManager.Shared" Version="1.3.0" ExcludeAssets="runtime" />
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" PrivateAssets="all" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" PrivateAssets="all" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.9" PrivateAssets="all" />
+    </ItemGroup>
+</Project>

@@ -18,6 +18,7 @@
   <Project Path="Kreedz.Style.WSOnly/Kreedz.Style.WSOnly.csproj" />
   <Project Path="Kreedz.Style.ADOnly/Kreedz.Style.ADOnly.csproj" />
   <Project Path="Kreedz.Style.AutoUnduck/Kreedz.Style.AutoUnduck.csproj" />
+  <Project Path="Kreedz.Event/Kreedz.Event.csproj" />
   <Project Path="Kreedz.Anticheat/Kreedz.Anticheat.csproj" />
   <Project Path="Kreedz.Jumpstats/Kreedz.Jumpstats.csproj" />
   <Project Path="Kreedz.Paint/Kreedz.Paint.csproj" />
